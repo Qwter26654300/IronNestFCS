@@ -1,4 +1,4 @@
-# IronNestFCS Community Patch 1.2.1
+# IronNestFCS Community Patch 1.2.2
 
 > **基于 [gxpppp/IronNestFCS](https://github.com/gxpppp/IronNestFCS) 的社区修改版**
 > 上游原版：[svr2kos2/IronNestFCS](https://github.com/svr2kos2/IronNestFCS) · MIT License
@@ -7,8 +7,19 @@
 
 [Iron Nest: Heavy Turret Simulator](https://store.steampowered.com/app/4300500/) 的 [MelonLoader](https://melonwiki.xyz/) Mod，为游戏中的重型炮塔加入一套自动化**火控系统（Fire Control System, FCS）**：自动扫描或点选目标，解算弹道，采购/装填炮弹，调整方向机与高低机，并完成确认与击发流程。
 
-> 基于游戏 Demo 版本开发，使用 IL2CPP + MelonLoader。  
-> 1.2.1 延续 1.2.0 的“动态候选池 + 真实击发预览 + 方向机行进链 + 弹药状态恢复”速射调度模型，并补充了移动目标后的队列位置刷新与自动标点恢复时的即时雷达扫描。
+> 基于 Iron Nest: Heavy Turret Simulator 开发，使用 IL2CPP + MelonLoader。  
+> 1.2.2 延续 1.2.0 的“动态候选池 + 真实击发预览 + 方向机行进链 + 弹药状态恢复”速射调度模型，并补充了目标死亡准备中止、成弹异常阻塞恢复和采购卡动态识别。
+
+## 相比 1.2.1 的变化
+
+- **目标死亡后停止准备**：任务进入采购、补药、诸元计算、装填前会再次核实当前实体是否仍然存活；如果目标已被摧毁，FCS
+  会释放任务，不再继续兑换、装填或开火。
+- **成弹异常阻塞恢复**：如果炮膛已有炮弹和药包，但游戏状态长时间没有进入 `CanFire=true`，FCS
+  会把该炮位标记为资源阻塞并释放方向机，避免一门炮拖住另一门炮。
+- **资源阻塞自动接回**：资源阻塞炮位后续如果变成可击发状态，进度监控会自动接回当前任务；按 `Numpad 0` 清除 halt
+  时也会先检查炮膛状态，不会盲目重启。
+- **采购卡动态识别**：采购台不再只依赖手写弹种字段，会自动识别当前关卡实际存在的 `*Shell` 购买卡；常用弹种正常记录，冷门弹种如果可购买会在日志中提示。
+- **低频诊断日志**：成弹等待和资源阻塞会打印 `chamber / actualPowder / canFire / hasFired` 等关键状态，方便定位游戏内装填状态不同步问题。
 
 ## 相比 1.1.x 的主要变化
 
@@ -20,6 +31,8 @@
 - **方向机行进链**：同优先级目标会沿当前方向机运动方向排序，减少大角度来回摆动；只有更高价值或同档更高星目标才允许明显打断当前方向链。
 - **已装弹/已装药恢复**：炮膛已有弹、药包已推进、待击发或药包已在架子上时，系统优先寻找兼容且就近的目标，把当前这发尽快打出去。
 - **资源不足停火**：没钱买炮弹或没钱补足药包时，自动扫荡/自动开炮会停止，避免“买失败 -> 继续诸元计算 -> 再买失败”的空转。
+- **目标死亡保护**：当前任务绑定的实体如果在准备阶段被摧毁，会在采购、补药、装填和击发前停止当前任务，避免对已死亡目标继续消耗资源。
+- **动态采购卡**：采购台会读取当前关卡实际存在的炮弹购买卡；没有对应购买卡时不会假定该弹种可购买。
 - **双炮共享方向机保护**：待击发、瞄准中、等待装填的炮位都会参与方向机优先级；下一发预转不会越过另一门已分配且更紧急的炮。
 - **暂停/失焦保护**：游戏暂停、窗口失焦或日志窗口切换时，FCS 会暂停点击、测算、采购、装填、开火和部分超时计时。
 - **目标存活清理**：候选池会清理已摧毁、已不存在、已分配或重复签名的目标，尽量避免对失效目标继续派发。
@@ -36,7 +49,8 @@
 - **已装弹目标重匹配**：如果炮膛中已有弹和药包，FCS 会优先寻找弹种与装药兼容的目标，尽量避免卡膛、浪费或错误跳到低价值目标。
 - **双炮管任务调度**：左右炮并行处理，自动分配空闲炮位；共享方向机由调度器统一保护。
 - **自动弹道解算**：读取目标方向角与距离，自动设定装药、弹种并解算仰角。
-- **多弹种支持**：AP / HCHE / HE / STAR / SMK，可通过控制台旁按钮选择当前弹种；弹仓缺弹时自动到采购台购买。
+- **多弹种支持**：AP / HCHE / HE / STAR / SMK，可通过控制台旁按钮选择当前弹种；APHE / ATMC 等冷门弹种也可通过冷门弹种选择器切换。弹仓缺弹时，FCS
+  会按当前关卡实际存在的购买卡自动采购。
 - **自动击发（可选）**：面板 `Auto Fire` 控制是否自动完成最后击发动作。
 - **最大装药（可选）**：面板 `Max Charge` 可强制使用 6 号装药。
 - **炮管强制重置**：`Numpad 7/8/9` / `Ctrl+7/8/9` 可重置左炮、右炮或双炮。
@@ -95,7 +109,7 @@
 
 ## 方向机调度
 
-方向机是左右炮共享资源。1.2.1 中，方向机调度遵循以下原则：
+方向机是左右炮共享资源。1.2.2 中，方向机调度遵循以下原则：
 
 - 待击发高于瞄准中，瞄准中高于等待装填。
 - 已装弹/已装药的炮位优先于普通预转。
@@ -122,6 +136,7 @@
 
 - **可用药包为 0 且没钱购买**：停止自动扫荡/自动开炮；如果炮弹已经入膛，炮位进入 `ResourceBlocked`，不让普通超时把状态打乱。
 - **可用药包为 1 包或以上**：尝试寻找同弹种且所需药包数不超过库存的目标，重新计算诸元，把当前这发尽快打出去。
+- **成弹状态不同步**：如果炮膛和装药读数都满足要求，但游戏迟迟没有变成可击发，FCS 会停放当前炮位并释放方向机；后续状态恢复为可击发时会自动接回。
 - **补充资源后**：按 `Numpad 0` / `Ctrl+0` 重新开启扫荡，会清除 halt 状态并恢复资源阻塞炮位。
 
 ## 敌人阵营识别
@@ -201,13 +216,15 @@ Logic 程序集从内存字节加载，不锁住磁盘 dll，并装进 `isCollec
 打开根目录的 [Directory.Build.props](Directory.Build.props)，找到这一行：
 
 ```xml
-<GameDir>D:\Steam\steamapps\common\IRON NEST Heavy Turret Simulator Demo</GameDir>
+
+<GameDir>D:\Steam\steamapps\common\Iron Nest Heavy Turret Simulator</GameDir>
 ```
 
 如果你的游戏不在 D 盘，把中间的路径改成你自己的游戏安装目录即可。不要加到 `Mods`、`UserData` 或 `UserLibs`，只填游戏根目录：
 
 ```xml
-<GameDir>E:\SteamLibrary\steamapps\common\IRON NEST Heavy Turret Simulator Demo</GameDir>
+
+<GameDir>E:\SteamLibrary\steamapps\common\Iron Nest Heavy Turret Simulator</GameDir>
 ```
 
 不知道路径在哪里时，可以在 Steam 里右键游戏：
@@ -217,6 +234,10 @@ Logic 程序集从内存字节加载，不锁住磁盘 dll，并装进 `isCollec
 ```
 
 打开的文件夹就是 `GameDir`。复制资源管理器地址栏里的路径，粘到 `Directory.Build.props` 里。
+
+构建前请确认该目录真实存在，并且已经给游戏安装过 MelonLoader。项目会从 `$(GameDir)\MelonLoader\` 下读取
+MelonLoader、Il2CppInterop、Unity 和游戏程序集引用；如果路径写错或还没安装
+MelonLoader，构建时会出现 `MelonLoader`、`UnityEngine`、`Assembly-CSharp` 找不到的错误。
 
 > 普通使用者只需要改 `Directory.Build.props`。不要手动修改 `IronNestFCS.csproj`、`IronNestFCS.Logic.csproj`、`IronNestFCS.CustomRecords.csproj` 或 `IronNestFCS.Abstractions.csproj` 里的输出路径。
 
@@ -229,7 +250,7 @@ dotnet build IronNestFCS.sln -c Release
 如果不想修改文件，也可以在构建时临时指定游戏路径：
 
 ```bash
-dotnet build IronNestFCS.sln -c Release -p:GameDir="E:\SteamLibrary\steamapps\common\IRON NEST Heavy Turret Simulator Demo"
+dotnet build IronNestFCS.sln -c Release -p:GameDir="D:\Steam\steamapps\common\Iron Nest Heavy Turret Simulator"
 ```
 
 各程序集的输出位置：
@@ -268,15 +289,17 @@ dotnet build IronNestFCS.sln -c Release -p:GameDir="E:\SteamLibrary\steamapps\co
 
 ## 常见问题
 
-| 问题                            | 原因                | 解决                                                               |
-|-------------------------------|-------------------|------------------------------------------------------------------|
-| 构建报 `MSB3270: MSIL/AMD64 不匹配` | 缺少 x64 配置         | 在 csproj 添加 `<PlatformTarget>x64</PlatformTarget>`               |
-| 装药/装弹卡住                       | 协程时序或按钮状态异常       | 按 `Numpad 7/8/9` 重置对应炮管                                          |
-| 笔记本按键无反应                      | 无小键盘              | 用 `Ctrl+数字键` 替代                                                  |
-| F9 后不扫荡                       | 热重载会重新初始化 Logic   | 再按 `Numpad 0` 开启扫荡                                               |
-| 没钱后队列不继续                      | FCS 进入资源 halt 状态  | 补充资源后按 `Numpad 0` 恢复                                             |
-| 铁巢移动后角度不对                     | 旧候选任务仍保存移动前的角度/距离 | 按 `Numpad 5` 切回 Auto 或按 `Numpad 0` 开启扫荡会强制扫描并刷新候选池；正在执行的左右炮任务不会改 |
-| 目标列表和击发目标不完全一致                | 已装弹炮位会优先找兼容目标     | 以左上角 `Queue` 的真实预览为准                                             |
+| 问题                            | 原因                    | 解决                                                               |
+|-------------------------------|-----------------------|------------------------------------------------------------------|
+| 构建报 `MSB3270: MSIL/AMD64 不匹配` | 缺少 x64 配置             | 在 csproj 添加 `<PlatformTarget>x64</PlatformTarget>`               |
+| 装药/装弹卡住                       | 协程时序或按钮状态异常           | 按 `Numpad 7/8/9` 重置对应炮管                                          |
+| 笔记本按键无反应                      | 无小键盘                  | 用 `Ctrl+数字键` 替代                                                  |
+| F9 后不扫荡                       | 热重载会重新初始化 Logic       | 再按 `Numpad 0` 开启扫荡                                               |
+| 没钱后队列不继续                      | FCS 进入资源 halt 状态      | 补充资源后按 `Numpad 0` 恢复                                             |
+| 目标刚被打死后仍准备下一发                 | 旧版本会在长时间采购/诸元计算后才核实存活 | 1.2.2 会在采购、补药、装填、击发前再次核实当前实体，已死亡则停止当前任务                          |
+| 冷门弹种无法自动购买                    | 当前关卡可能没有对应购买卡         | 1.2.2 会动态识别采购台实际存在的 `*Shell` 卡；日志会提示可购买的常用/冷门弹种                  |
+| 铁巢移动后角度不对                     | 旧候选任务仍保存移动前的角度/距离     | 按 `Numpad 5` 切回 Auto 或按 `Numpad 0` 开启扫荡会强制扫描并刷新候选池；正在执行的左右炮任务不会改 |
+| 目标列表和击发目标不完全一致                | 已装弹炮位会优先找兼容目标         | 以左上角 `Queue` 的真实预览为准                                             |
 
 ## 贡献
 

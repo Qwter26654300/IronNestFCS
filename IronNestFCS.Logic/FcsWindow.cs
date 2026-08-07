@@ -23,6 +23,7 @@ public class FcsWindow
     private static readonly Color ClrSweep = new(0.96f, 0.35f, 0.14f);
 
     public bool AutoSweepEnabled { get; set; }
+    public bool AutoMarkerEnabled { get; set; } = true;
 
     public FcsWindow(FSC fcs) => this.fcs = fcs;
 
@@ -39,6 +40,7 @@ public class FcsWindow
         if (fcs.RightTask != null) extra += lineH * 3;
         else extra += lineH;
         var queuePreview = fcs.QueueCan;
+        extra += lineH;
         if (fcs.AutomaticFireHalted) extra += lineH * 2;
         extra += lineH * (queuePreview.Count + 1);
         extra += 12f;
@@ -60,18 +62,23 @@ public class FcsWindow
         if (AutoSweepEnabled)
         {
             GUI.color = ClrSweep;
-            GUI.Label(new Rect(x, y, w, h), "[Sweep ON]");
+            GUI.Label(new Rect(x, y, w, h), "[扫荡 开]");
             GUI.color = oldColor;
             y += lineH;
         }
 
+        GUI.color = AutoMarkerEnabled ? ClrLabel : ClrWarning;
+        GUI.Label(new Rect(x, y, w, h), $"标点: {(AutoMarkerEnabled ? "自动标点" : "手动优先")}");
+        GUI.color = oldColor;
+        y += lineH;
+
         if (fcs.AutomaticFireHalted)
         {
             GUI.color = ClrFailed;
-            GUI.Label(new Rect(x, y, w, h), "[HALT] Auto fire stopped");
+            GUI.Label(new Rect(x, y, w, h), "[停火] 自动流程已停止");
             y += lineH;
             GUI.color = ClrWarning;
-            GUI.Label(new Rect(x, y, w, h), fcs.AutomaticFireHaltReason ?? "Resource unavailable");
+            GUI.Label(new Rect(x, y, w, h), DisplayHaltReason(fcs.AutomaticFireHaltReason));
             GUI.color = oldColor;
             y += lineH;
         }
@@ -81,21 +88,21 @@ public class FcsWindow
 
         if (!fcs.IsBound)
         {
-            GUI.Label(new Rect(x, y, w, h), "Waiting for scene...");
+            GUI.Label(new Rect(x, y, w, h), "等待场景...");
             y += lineH;
-            GUI.Label(new Rect(x, y, w, h), "Press F9 to reload");
+            GUI.Label(new Rect(x, y, w, h), "按 F9 重新加载");
             return;
         }
 
-        y = DrawGunRow("Left  ", fcs.LeftTask, x, y, w, h, lineH);
+        y = DrawGunRow("左炮", fcs.LeftTask, x, y, w, h, lineH);
         DrawDivider(x, y, w);
         y += 4f;
-        y = DrawGunRow("Right ", fcs.RightTask, x, y, w, h, lineH);
+        y = DrawGunRow("右炮", fcs.RightTask, x, y, w, h, lineH);
         DrawDivider(x, y, w);
         y += 4f;
 
         GUI.color = ClrLabel;
-        GUI.Label(new Rect(x, y, w, h), $"Queue: {fcs.PendingCount}");
+        GUI.Label(new Rect(x, y, w, h), $"队列: {fcs.PendingCount}");
         GUI.color = oldColor;
         y += lineH;
 
@@ -115,7 +122,7 @@ public class FcsWindow
         if (task == null)
         {
             GUI.color = ClrIdle;
-            GUI.Label(new Rect(x, y, w, h), $"{label} Idle");
+            GUI.Label(new Rect(x, y, w, h), $"{label} 空闲");
             GUI.color = oldColor;
             return y + lineH;
         }
@@ -130,13 +137,13 @@ public class FcsWindow
 
         GUI.color = stateColor;
         var marker = task.manualPriority ? "M " : "";
-        GUI.Label(new Rect(x, y, w, h), $"{label} {marker}T{task.targetId}  {task.bulletType}  {task.progress}");
+        GUI.Label(new Rect(x, y, w, h), $"{label} {marker}T{task.targetId}  {task.bulletType}  {ProgressText(task.progress)}");
         GUI.color = oldColor;
         y += lineH;
 
         GUI.color = ClrLabel;
         GUI.Label(new Rect(x + 12f, y, w - 12f, h),
-            $"Target: {task.angel:F1}° / {task.distance:F2}km");
+            $"目标: {task.angel:F1}° / {task.distance:F2}km");
         GUI.color = oldColor;
         y += lineH;
 
@@ -144,11 +151,46 @@ public class FcsWindow
         int chg = FcsCalc.Charge(task.distance);
         GUI.color = ClrWarning;
         GUI.Label(new Rect(x + 12f, y, w - 12f, h),
-            $"Fire: {el:F2}°  |  {chg}号药");
+            $"射击: {el:F2}°  |  {chg}号药");
         GUI.color = oldColor;
         y += lineH;
 
         return y;
+    }
+
+    private static string ProgressText(Progress progress)
+    {
+        return progress switch
+        {
+            Progress.Pending => "待分配",
+            Progress.Calculating => "诸元计算",
+            Progress.SelectingBullet => "选弹",
+            Progress.LoadingBullet => "装弹",
+            Progress.LoadingPowder => "装药",
+            Progress.WaitLoading => "待成弹",
+            Progress.Aiming => "瞄准",
+            Progress.WaitingForFire => "待击发",
+            Progress.ResourceBlocked => "资源阻塞",
+            Progress.BackToIdle => "复位",
+            Progress.Finished => "完成",
+            Progress.Failed => "失败",
+            _ => progress.ToString()
+        };
+    }
+
+    private static string DisplayHaltReason(string? reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason)) return "资源不足";
+        var text = reason.Replace("Left", "左炮").Replace("Right", "右炮");
+        if (text.Contains("could not buy") && text.Contains("purchase did not enter cylinder"))
+            return text.Replace("could not buy", "无法购买").Replace("purchase did not enter cylinder", "购买后未进弹仓");
+        if (text.Contains("cannot buy powder and no target matches"))
+            return text.Replace("cannot buy powder and no target matches", "无法购买药包，且没有目标匹配");
+        if (text.Contains("cannot buy powder"))
+            return text.Replace("cannot buy powder", "无法购买药包");
+        if (text.Contains("was destroyed while a round is loaded"))
+            return text.Replace("target", "目标").Replace("was destroyed while a round is loaded", "已被摧毁，当前炮仍有已装弹");
+        return text;
     }
 
     private static void DrawDivider(float x, float y, float w)

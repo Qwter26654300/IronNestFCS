@@ -18,6 +18,27 @@ public class FcsSceneInteractor {
     public BulletType selectedBulletType = BulletType.AP;
 
     private List<GameObject> bulletTypeBtns = new();
+    private GameObject? otherSelectButton;
+    private GameObject? otherPrevButton;
+    private GameObject? otherNextButton;
+    private TextMeshPro? otherBulletText;
+    private readonly BulletType[] otherBulletTypes =
+    {
+        BulletType.CLMN,
+        BulletType.CYAN,
+        BulletType.DRIL,
+        BulletType.EQKE,
+        BulletType.FLCH,
+        BulletType.INCN,
+        BulletType.LE,
+        BulletType.PLCM,
+        BulletType.PHGN,
+        BulletType.PRPG,
+        BulletType.TEAR,
+        BulletType.THRM,
+        BulletType.WP,
+    };
+    private int otherBulletIndex;
 
     // 每个地图目标对应一个按钮：targetId -> 按钮。点击=用当前弹种为该目标入队一个任务。
     private readonly Dictionary<int, GameObject> targetButtons = new();
@@ -37,25 +58,23 @@ public class FcsSceneInteractor {
     private void InitializeBulletTypeButtons() {
         const float z = -18.4181f;
         float x = 0.3488f;
-        foreach (BulletType type in Enum.GetValues(typeof(BulletType))) {
-            BulletType captured = type;
-            // 先声明再赋值：lambda 要捕获 button，不能在其声明表达式内部引用它。
-            GameObject button = null;
-            button = AddButton(() => {
-                selectedBulletType = captured;
-                foreach (var btn in bulletTypeBtns) {
-                    SetColor(btn, btn == button ? Color.green : Color.white);
-                }
-            }, type == BulletType.AP ? Color.green : Color.white);
-            button.transform.position = new Vector3(x, -0.6916f, z);
-            button.transform.localScale = Vector3.one * 0.02f;
-            bulletTypeBtns.Add(button);
-            var text = AddText(type.ToString(), 14f);
-            text.transform.SetParent(button.transform, false);
-            text.transform.localPosition = new Vector3(-1.9f, 0, -10.6f);
-            text.transform.localScale = Vector3.one * 1.0f;
-            x -= 0.05f;
+        var fixedBullets = new[]
+        {
+            BulletType.AP,
+            BulletType.HCHE,
+            BulletType.HE,
+            BulletType.STAR,
+            BulletType.SMK,
+            BulletType.APHE,
+            BulletType.ATMC,
+        };
+
+        foreach (var type in fixedBullets) {
+            AddBulletButton(type, ref x, z);
         }
+
+        x -= 0.025f;
+        InitializeOtherBulletButtons(ref x, z);
 
         GameObject autoFireButton = null;
         autoFireButton = AddButton(() => {
@@ -82,6 +101,76 @@ public class FcsSceneInteractor {
         maxChargeText.transform.SetParent(maxChargeButton.transform, false);
         maxChargeText.transform.localPosition = new Vector3(-1.9f, 0, -10.6f);
         maxChargeText.transform.localScale = Vector3.one * 1.0f;
+    }
+
+    private void AddBulletButton(BulletType type, ref float x, float z) {
+        GameObject button = null;
+        button = AddButton(() => SelectBulletType(type, button), type == selectedBulletType ? Color.green : Color.white);
+        button.transform.position = new Vector3(x, -0.6916f, z);
+        button.transform.localScale = Vector3.one * 0.02f;
+        bulletTypeBtns.Add(button);
+        var text = AddText(type.ToString(), 14f);
+        text.transform.SetParent(button.transform, false);
+        text.transform.localPosition = new Vector3(-1.9f, 0, -10.6f);
+        text.transform.localScale = Vector3.one * 1.0f;
+        x -= 0.05f;
+    }
+
+    private void InitializeOtherBulletButtons(ref float x, float z) {
+        const float rowY = -0.6916f;
+        var selectZ = z;
+        var prevZ = selectZ - 0.20f;
+        var nextZ = selectZ - 0.26f;
+
+        otherSelectButton = AddButton(() => SelectBulletType(otherBulletTypes[otherBulletIndex], otherSelectButton), Color.white);
+        otherSelectButton.transform.position = new Vector3(x, rowY, selectZ);
+        otherSelectButton.transform.localScale = Vector3.one * 0.02f;
+        bulletTypeBtns.Add(otherSelectButton);
+        var otherTextObj = AddText(otherBulletTypes[otherBulletIndex].ToString(), 14f);
+        otherTextObj.transform.SetParent(otherSelectButton.transform, false);
+        otherTextObj.transform.localPosition = new Vector3(-1.9f, 0, -10.6f);
+        otherTextObj.transform.localScale = Vector3.one * 1.0f;
+        otherBulletText = otherTextObj.GetComponent<TextMeshPro>();
+
+        otherPrevButton = AddButton(() => CycleOtherBullet(-1), Color.white);
+        otherPrevButton.transform.position = new Vector3(x, rowY, prevZ);
+        otherPrevButton.transform.localScale = Vector3.one * 0.02f;
+        bulletTypeBtns.Add(otherPrevButton);
+        var prevText = AddText("<", 14f);
+        prevText.transform.SetParent(otherPrevButton.transform, false);
+        prevText.transform.localPosition = new Vector3(-1.9f, 0, -10.6f);
+        prevText.transform.localScale = Vector3.one * 1.0f;
+
+        otherNextButton = AddButton(() => CycleOtherBullet(1), Color.white);
+        otherNextButton.transform.position = new Vector3(x, rowY, nextZ);
+        otherNextButton.transform.localScale = Vector3.one * 0.02f;
+        bulletTypeBtns.Add(otherNextButton);
+        var nextText = AddText(">", 14f);
+        nextText.transform.SetParent(otherNextButton.transform, false);
+        nextText.transform.localPosition = new Vector3(-1.9f, 0, -10.6f);
+        nextText.transform.localScale = Vector3.one * 1.0f;
+
+        x -= 0.05f;
+    }
+
+    private void SelectBulletType(BulletType type, GameObject? selectedButton = null) {
+        selectedBulletType = type;
+        foreach (var btn in bulletTypeBtns) {
+            SetColor(btn, btn == selectedButton ? Color.green : Color.white);
+        }
+    }
+
+    private void CycleOtherBullet(int delta) {
+        otherBulletIndex += delta;
+        if (otherBulletIndex < 0) otherBulletIndex = otherBulletTypes.Length - 1;
+        if (otherBulletIndex >= otherBulletTypes.Length) otherBulletIndex = 0;
+        var type = otherBulletTypes[otherBulletIndex];
+        if (otherBulletText != null) otherBulletText.text = type.ToString();
+        selectedBulletType = type;
+        foreach (var btn in bulletTypeBtns) {
+            SetColor(btn, btn == otherSelectButton ? Color.green : Color.white);
+        }
+        MelonLogger.Msg($"[FCS] 弹种选择: {type}");
     }
 
     /// <summary>
@@ -143,7 +232,7 @@ public class FcsSceneInteractor {
         }, 1f));
     }
 
-    public void FireAtWorldPos(int id, Vector3 worldPos, EntityLocation? location = null)
+    public void FireAtWorldPos(int id, Vector3 worldPos, EntityLocation? location = null, bool preserveAimPoint = false)
     {
         var turret = fcs.MapTable.turret;
         if (turret == null) return;
@@ -161,6 +250,8 @@ public class FcsSceneInteractor {
             distance = dist,
             position = localPos * 3.8164f + new Vector3(10.016f, 5.235f, 0f),
             location = location,
+            targetTypeDialValue = TargetTypeMapper.FromLocation(location),
+            preserveAimPoint = preserveAimPoint,
             bulletType = selectedBulletType
         };
         fcs.EnqueueTask(task);
@@ -184,6 +275,7 @@ public class FcsSceneInteractor {
             distance = dist,
             position = localPos * 3.8164f + new Vector3(10.016f, 5.235f, 0f),
             location = location,
+            targetTypeDialValue = TargetTypeMapper.FromLocation(location),
             bulletType = selectedBulletType
         };
         fcs.EnqueueTaskFront(task);

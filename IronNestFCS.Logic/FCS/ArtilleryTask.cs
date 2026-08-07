@@ -25,6 +25,8 @@ public class ArtilleryTask {
     public float distance;
     public Vector3 position;
     public EntityLocation? location;
+    public int targetTypeDialValue;
+    public bool preserveAimPoint;
     public BulletType bulletType;
     public Progress progress;
     public bool manualPriority;

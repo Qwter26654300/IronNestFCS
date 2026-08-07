@@ -9,11 +9,27 @@ namespace IronNestFCS.Logic.FCS;
 
 
 public enum BulletType {
+    EMPT = 0,
     AP = 1,
-    HCHE = 2,
-    HE = 3,
-    STAR = 4,
-    SMK = 5,
+    APHE = 2,
+    ATMC = 3,
+    CLMN = 4,
+    CYAN = 5,
+    DRIL = 6,
+    EQKE = 7,
+    FLCH = 8,
+    HCHE = 9,
+    HE = 10,
+    INCN = 11,
+    LE = 12,
+    PLCM = 13,
+    PHGN = 14,
+    PRPG = 15,
+    SMK = 16,
+    STAR = 17,
+    TEAR = 18,
+    THRM = 19,
+    WP = 20,
 }
 
 public class GunSystem {
@@ -47,9 +63,6 @@ public class GunSystem {
         }
 
         var chargeDisplays = reloadingConsole.GetComponentsInChildren<OdometerDisplay>(true);
-        for (var i = 0; i < chargeDisplays.Length; i++) {
-            MelonLogger.Msg($"[FCS] GunSystem {surfix}: charge display {i} {chargeDisplays[i].gameObject.name}={chargeDisplays[i].CurrentNumber}");
-        }
         remainingCharges = chargeDisplays.Length > 0 ? chargeDisplays[0] : null;
         actualCharges = chargeDisplays.Length > 1 ? chargeDisplays[^1] : null;
         
@@ -140,7 +153,18 @@ public class GunSystem {
         foreach (var shell in shellSelector.bullets) {
             bullets.Add(shell?.GetComponent<ShellBlueprint>()?.shellDefinition?.ShellId);
         }
-        MelonLogger.Msg($"[FCS] GunSystem {_surfix}: Cylinder bullets: {string.Join(", ", bullets)}");
+    }
+
+    public bool TryGetFirstBulletInCylinder(out BulletType bulletType) {
+        RefreshBullets();
+        foreach (var bullet in bullets) {
+            if (Enum.TryParse(bullet, out bulletType)) {
+                return true;
+            }
+        }
+
+        bulletType = default;
+        return false;
     }
 
     public IEnumerator NextBullet() {
@@ -148,7 +172,6 @@ public class GunSystem {
             MelonLogger.Error($"[FCS] GunSystem {_surfix}: NextBulletButton unbound");
             yield break;
         }
-        MelonLogger.Msg("[GunSystem] NextBullet");
         yield return FcsSceneInteractor.WaitAndClick(nextBulletButton, label: $"{_surfix}.NextBullet");
     }
     
@@ -243,7 +266,6 @@ public class GunSystem {
             }
         }
         if (CanFire()) {
-            MelonLogger.Msg($"[GunSystem] WaitLoadPowderButtonReady: gun already can fire");
             yield break;
         }
         if (!loadPowderButton.isActive) {
@@ -270,25 +292,21 @@ public class GunSystem {
 
     public int SelectedPowderCount() {
         var count = actualCharges != null ? (int)actualCharges.CurrentNumber : 0;
-        MelonLogger.Msg($"[FCS] GunSystem {_surfix}: actual powder display={count}");
         return count;
     }
 
     public IEnumerator LoadPowder(int count) {
         if (CanFire()) {
-            MelonLogger.Msg($"[FCS] GunSystem {_surfix}: skip load powder, gun already can fire");
             yield break;
         }
         yield return new WaitForSeconds(0.5f);
         if (CanFire()) {
-            MelonLogger.Msg($"[FCS] GunSystem {_surfix}: skip select powder, gun already can fire");
             yield break;
         }
         yield return SelectPowder(count);
         if (LastActionFailed) yield break;
         yield return new WaitForSeconds(0.5f);
         if (CanFire()) {
-            MelonLogger.Msg($"[FCS] GunSystem {_surfix}: skip push powder after select, gun already can fire");
             yield break;
         }
         yield return PushPowder();
@@ -301,7 +319,6 @@ public class GunSystem {
     public IEnumerator CompletePowderSelectionFrom(int currentCount, int targetCount) {
         LastActionFailed = false;
         if (CanFire()) {
-            MelonLogger.Msg($"[FCS] GunSystem {_surfix}: skip complete powder, gun already can fire");
             yield break;
         }
         if (currentCount >= targetCount) {
@@ -311,7 +328,6 @@ public class GunSystem {
 
         for (var i = currentCount; i < targetCount; i++) {
             if (CanFire()) {
-                MelonLogger.Msg($"[FCS] GunSystem {_surfix}: stop adding powder, gun already can fire");
                 yield break;
             }
             yield return WaitPowderButtonReady(i, 45f);
@@ -330,7 +346,6 @@ public class GunSystem {
         }
         yield return new WaitForSeconds(0.5f);
         if (CanFire()) {
-            MelonLogger.Msg($"[FCS] GunSystem {_surfix}: skip final push powder, gun already can fire");
             yield break;
         }
         yield return PushPowder();
@@ -338,11 +353,9 @@ public class GunSystem {
 
     public IEnumerator PushPowder() {
         LastActionFailed = false;
-        MelonLogger.Msg($"[FCS] GunSystem {_surfix}: push powder");
         yield return WaitLoadPowderButtonReady(45f);
         if (LastActionFailed) yield break;
         if (CanFire()) {
-            MelonLogger.Msg($"[FCS] GunSystem {_surfix}: skip push powder, gun already can fire");
             yield break;
         }
         yield return FcsSceneInteractor.WaitAndClick(loadPowderButton!, label: $"{_surfix}.LoadPowder", timeoutSeconds: 45f);

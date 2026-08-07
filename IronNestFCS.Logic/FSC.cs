@@ -62,6 +62,7 @@ public class FSC
     public int PendingCount => _taskQueue.Count;
     public bool HasActiveTasks => LeftTask != null || RightTask != null;
     public Queue<ArtilleryTask> QueueCan => new Queue<ArtilleryTask>(BuildDispatchPreview(QueuePreviewLimit));
+    public BulletType SelectedBulletType => _sceneInteractor.selectedBulletType;
 
     /// <summary>
     /// 控制台互斥锁：保护弹道计算器、确认台、采购台这些共享操作。
@@ -119,8 +120,8 @@ public class FSC
         if (IsBound) {
             ProtectLoadedGunAfterReload(LeftRight.Left, LeftGun);
             ProtectLoadedGunAfterReload(LeftRight.Right, RightGun);
+            StartProgressMonitor();
         }
-        StartProgressMonitor();
         return IsBound;
     }
 
@@ -134,8 +135,8 @@ public class FSC
     }
 
     /// <summary>把扫描到的目标加入打击队列。</summary>
-    public void FireAtWorldPos(int id, Vector3 worldPos, EntityLocation? location = null) {
-        _sceneInteractor.FireAtWorldPos(id, worldPos, location);
+    public void FireAtWorldPos(int id, Vector3 worldPos, EntityLocation? location = null, bool preserveAimPoint = false) {
+        _sceneInteractor.FireAtWorldPos(id, worldPos, location, preserveAimPoint);
     }
 
     /// <summary>把扫描到的目标插到打击队列最前面。</summary>
@@ -172,7 +173,7 @@ public class FSC
             var match = task.location == null
                 ? null
                 : alive.FirstOrDefault(unit => unit.Location != null && _entityLocationComparer.Equals(unit.Location, task.location));
-            if (match != null && MapTable.TryUpdateTaskFromWorldPos(task, match.WorldPos, match.Location)) {
+            if (!task.preserveAimPoint && match != null && MapTable.TryUpdateTaskFromWorldPos(task, match.WorldPos, match.Location)) {
                 refreshed++;
             }
 
@@ -222,8 +223,7 @@ public class FSC
         var abortedRight = RightTask;
 
         for (int i = _runningCoroutines.Count - 1; i >= 0; i--) {
-            try { MelonCoroutines.Stop(_runningCoroutines[i].handle); }
-            catch (Exception ex) { MelonLogger.Error($"[FCS] AbortAll stop failed: {ex}"); }
+            StopCoroutineHandle(_runningCoroutines[i].handle, "AbortAll");
             _runningCoroutines.RemoveAt(i);
         }
 
@@ -252,6 +252,7 @@ public class FSC
         AutomaticFireHaltReason = null;
         ResumeResourceBlockedGun(LeftRight.Left);
         ResumeResourceBlockedGun(LeftRight.Right);
+        TryDispatch();
     }
 
     private void HaltAutomaticFire(string reason) {
@@ -274,16 +275,54 @@ public class FSC
         if (task?.progress != Progress.ResourceBlocked) {
             return;
         }
+        var gunSys = leftRight == LeftRight.Left ? LeftGun : RightGun;
         if (!IsTaskAlive(task)) {
             MelonLogger.Warning($"[FCS] {leftRight}: resource-blocked target T{task.targetId} is gone; release slot.");
             ReleaseTaskTarget(task);
             ReleaseSlot(leftRight);
             return;
         }
+        if (!gunSys.CanFire()) {
+            MelonLogger.Warning($"[FCS] {leftRight}: resource block still waiting. {GunState(gunSys)}");
+            return;
+        }
         MelonLogger.Warning($"[FCS] {leftRight}: resume resource-blocked task T{task.targetId}.");
         task.progress = Progress.Pending;
         MarkProgress(leftRight, Progress.Pending);
         StartTaskRoutine(leftRight, task);
+    }
+
+    private bool RecoverResourceBlockedGunIfReady(LeftRight leftRight) {
+        var task = leftRight == LeftRight.Left ? LeftTask : RightTask;
+        if (task?.progress != Progress.ResourceBlocked) {
+            return false;
+        }
+
+        var gunSys = leftRight == LeftRight.Left ? LeftGun : RightGun;
+        if (gunSys.HasFired()) {
+            return CompleteIfAlreadyFired(leftRight);
+        }
+
+        if (!IsTaskAlive(task)) {
+            MelonLogger.Warning($"[FCS] {leftRight}: resource-blocked target T{task.targetId} is gone; release slot.");
+            ReleaseTaskTarget(task);
+            ReleaseSlot(leftRight);
+            return true;
+        }
+
+        if (!gunSys.CanFire()) {
+            return false;
+        }
+
+        MelonLogger.Warning($"[FCS] {leftRight}: resource-blocked round is now ready; resume task T{task.targetId}. {GunState(gunSys)}");
+        task.progress = Progress.Pending;
+        MarkProgress(leftRight, Progress.Pending);
+        StartTaskRoutine(leftRight, task);
+        return true;
+    }
+
+    private static string GunState(GunSystem gunSys) {
+        return $"chamber={gunSys.BulletInChamber() ?? "empty"}, actualPowder={gunSys.SelectedPowderCount()}, canFire={gunSys.CanFire()}, hasFired={gunSys.HasFired()}, lastActionFailed={gunSys.LastActionFailed}";
     }
 
     private void StartProgressMonitor() {
@@ -303,10 +342,18 @@ public class FSC
     private void StopGunCoroutines(LeftRight gun, string reason) {
         for (int i = _runningCoroutines.Count - 1; i >= 0; i--) {
             if (_runningCoroutines[i].gun != gun) continue;
-            try { MelonCoroutines.Stop(_runningCoroutines[i].handle); }
-            catch (Exception ex) { MelonLogger.Error($"[FCS] {reason} stop failed: {ex}"); }
+            StopCoroutineHandle(_runningCoroutines[i].handle, reason);
             _runningCoroutines.RemoveAt(i);
         }
+    }
+
+    private static void StopCoroutineHandle(object? handle, string reason) {
+        if (handle == null) {
+            return;
+        }
+
+        try { MelonCoroutines.Stop(handle); }
+        catch (Exception ex) { MelonLogger.Error($"[FCS] {reason} stop failed: {ex}"); }
     }
 
     private bool CompleteIfAlreadyFired(LeftRight gun) {
@@ -368,6 +415,8 @@ public class FSC
             var now = Time.time;
             ReleaseReloadProtectionIfFired(LeftRight.Left, LeftGun);
             ReleaseReloadProtectionIfFired(LeftRight.Right, RightGun);
+            RecoverResourceBlockedGunIfReady(LeftRight.Left);
+            RecoverResourceBlockedGunIfReady(LeftRight.Right);
             if (LeftTask != null && _leftProgressTime > 0 && now - _leftProgressTime > ProgressTimeout) {
                 if (CompleteIfAlreadyFired(LeftRight.Left)) {
                     _leftProgressTime = 0;
@@ -405,8 +454,7 @@ public class FSC
         }
 
         foreach (var (handle, _) in _runningCoroutines) {
-            try { MelonCoroutines.Stop(handle); }
-            catch (Exception ex) { MelonLogger.Error($"[FCS] Stop coroutines failed: {ex}"); }
+            StopCoroutineHandle(handle, "Stop coroutines");
         }
         _runningCoroutines.Clear();
 
@@ -512,8 +560,28 @@ public class FSC
         }
 
         if (_reloadProtectedGuns.Contains(slot)) {
-            candidates = candidates.Where(IsSameDirectionAsCurrentTurret).ToList();
-            if (candidates.Count == 0) {
+            var sameDirection = candidates.Where(IsSameDirectionAsCurrentTurret).ToList();
+            if (sameDirection.Count > 0) {
+                candidates = sameDirection;
+            }
+            else if (TryGetLoadedRound(slot, out var shell, out var actualPowder)) {
+                var compatibleLoadedTargets = candidates
+                    .Where(task => IsCompatibleLoadedTask(task, shell, actualPowder))
+                    .ToList();
+                if (compatibleLoadedTargets.Count == 0) {
+                    MelonLogger.Msg(
+                        $"[FCS] {slot}: wait for compatible reload recovery target. " +
+                        $"loaded={shell}/{actualPowder}, current={Turret.CurrentMapAngle?.ToString("F1") ?? "unknown"}.");
+                    return null;
+                }
+
+                candidates = compatibleLoadedTargets;
+                MelonLogger.Warning(
+                    $"[FCS] {slot}: no same-direction reload recovery target; " +
+                    $"use nearest compatible loaded round target. loaded={shell}/{actualPowder}, " +
+                    $"current={Turret.CurrentMapAngle?.ToString("F1") ?? "unknown"}.");
+            }
+            else {
                 MelonLogger.Msg($"[FCS] {slot}: wait for same-direction reload recovery target. current={Turret.CurrentMapAngle?.ToString("F1") ?? "unknown"}.");
                 return null;
             }
@@ -529,6 +597,19 @@ public class FSC
             $"[FCS] {slot}: dispatch T{selected.targetId}; priority={TaskPriority(selected)}, stars={TaskStars(selected)}, " +
             $"angle={selected.angel:F1}, sweep={_turretSweepDirection}.");
         return selected;
+    }
+
+    private bool TryGetLoadedRound(LeftRight slot, out BulletType shell, out int actualPowder) {
+        shell = BulletType.AP;
+        actualPowder = 0;
+        var gunSys = slot == LeftRight.Left ? LeftGun : RightGun;
+        var chambered = gunSys.BulletInChamber();
+        if (!TryParseBulletType(chambered, out shell)) {
+            return false;
+        }
+
+        actualPowder = gunSys.SelectedPowderCount();
+        return true;
     }
 
     private List<ArtilleryTask> BuildDispatchPreview(int limit) {
@@ -686,7 +767,9 @@ public class FSC
     /// </summary>
     private void StartTaskRoutine(LeftRight leftRight, ArtilleryTask task) {
         var handle = MelonCoroutines.Start(RunTaskRoutine(leftRight, task));
-        _runningCoroutines.Add((handle, leftRight));
+        if (handle != null) {
+            _runningCoroutines.Add((handle, leftRight));
+        }
     }
 
     /// <summary>释放炮位，并尝试从队列拉取下一发任务。</summary>
@@ -935,6 +1018,19 @@ public class FSC
         else {
             ReleaseSlot(leftRight);
         }
+        return true;
+    }
+
+    private bool DropDestroyedTaskBeforeLoading(LeftRight leftRight, ArtilleryTask task, string stage) {
+        if (IsTaskAlive(task)) {
+            return false;
+        }
+
+        MelonLogger.Warning($"[FCS] {leftRight}: target T{task.targetId} destroyed before {stage}; skip purchase/calculation.");
+        task.progress = Progress.Failed;
+        MarkProgress(leftRight, Progress.Failed);
+        FinishTask(task);
+        ReleaseSlot(leftRight);
         return true;
     }
 
@@ -1189,11 +1285,7 @@ public class FSC
         var elevation = 0f;
         yield return _deskLock.Acquire();
         try {
-            yield return BallisticCalculator.SetDistance(task.distance);
-            yield return BallisticCalculator.SetDirection(task.angel);
-            yield return BallisticCalculator.SetCharge(powderCount);
-            yield return BallisticCalculator.SetShellType(task.bulletType);
-            yield return BallisticCalculator.Calculate();
+            yield return CalculateBallisticSolution(task, powderCount);
             elevation = BallisticCalculator.GetElevation();
             MelonLogger.Warning($"[FCS] {leftRight}: dump solution elevation={elevation:F2}");
         }
@@ -1244,6 +1336,15 @@ public class FSC
             ReleaseTurretOnce(turret);
         }
         done?.Invoke(fired);
+    }
+
+    private IEnumerator CalculateBallisticSolution(ArtilleryTask task, int powderCount) {
+        yield return BallisticCalculator.SetDistance(task.distance);
+        yield return BallisticCalculator.SetDirection(task.angel);
+        yield return BallisticCalculator.SetCharge(powderCount);
+        yield return BallisticCalculator.SetTargetType(task.targetTypeDialValue);
+        yield return BallisticCalculator.SetShellType(task.bulletType);
+        yield return BallisticCalculator.Calculate();
     }
 
     private IEnumerator RunTaskRoutine(LeftRight leftRight, ArtilleryTask task) {
@@ -1303,22 +1404,43 @@ public class FSC
             _loadedRoundBlocked.Remove(leftRight);
         }
 
+        if (DropDestroyedTaskBeforeLoading(leftRight, task, "shell purchase")) {
+            yield break;
+        }
+
         if (!chamberAlreadyLoaded) {
             task.progress = Progress.SelectingBullet;
             MarkProgress(leftRight, Progress.SelectingBullet);
             if (!gunSys.HaveBulletInCylinder(task.bulletType)) {
                 if (!gunSys.HaveEmptyShellInCylinder()) {
-                    MelonLogger.Warning($"[FCS] {leftRight}: no {task.bulletType} in cylinder and no empty shell slot; skip ballistic calculation for T{task.targetId}.");
-                    task.progress = Progress.Failed;
-                    MarkProgress(leftRight, Progress.Failed);
-                    ReleaseTaskTarget(task);
-                    ReleaseSlot(leftRight);
-                    yield break;
+                    if (gunSys.TryGetFirstBulletInCylinder(out var fallbackShell)) {
+                        MelonLogger.Warning(
+                            $"[FCS] {leftRight}: no {task.bulletType} in cylinder and no empty shell slot; " +
+                            $"use available {fallbackShell} for T{task.targetId}.");
+                        task.bulletType = fallbackShell;
+                    }
+                    else {
+                        MelonLogger.Warning($"[FCS] {leftRight}: no {task.bulletType} in cylinder and no empty shell slot; skip ballistic calculation for T{task.targetId}.");
+                        task.progress = Progress.Failed;
+                        MarkProgress(leftRight, Progress.Failed);
+                        ReleaseTaskTarget(task);
+                        ReleaseSlot(leftRight);
+                        yield break;
+                    }
                 }
 
                 yield return _deskLock.Acquire();
                 try {
                     if (!gunSys.HaveBulletInCylinder(task.bulletType)) {
+                        if (!_purchaseDeck.CanBuyShell(task.bulletType)) {
+                            MelonLogger.Error($"[FCS] {leftRight}: no purchase card for {task.bulletType}; use existing shells only.");
+                            HaltAutomaticFire($"{leftRight} has no purchase card for {task.bulletType}; existing shells only.");
+                            task.progress = Progress.Failed;
+                            MarkProgress(leftRight, Progress.Failed);
+                            ReleaseTaskTarget(task);
+                            ReleaseSlot(leftRight);
+                            yield break;
+                        }
                         yield return _purchaseDeck.BuyShell(task.bulletType, leftRight);
                         yield return gunSys.WaitUntilBulletInCylinder(task.bulletType, 5f);
                     }
@@ -1356,18 +1478,27 @@ public class FSC
         float elevation = 0f;
         bool viable = true;
         bool resourceBlocked = false;
+        bool destroyedBeforeLoad = false;
         ArtilleryTask? dumpAfterDesk = null;
         yield return _deskLock.Acquire();
         try {
-            task.progress = Progress.Calculating;
-            MarkProgress(leftRight, Progress.Calculating);
-            yield return BallisticCalculator.SetDistance(task.distance);
-            yield return BallisticCalculator.SetDirection(task.angel);
-            yield return BallisticCalculator.SetCharge(powderCount);
-            yield return BallisticCalculator.SetShellType(task.bulletType);
-            yield return BallisticCalculator.Calculate();
-            elevation = BallisticCalculator.GetElevation();
-            if (recalculatedWithLoadedPowder && !IsValidElevation(elevation)) {
+            if (!IsTaskAlive(task)) {
+                destroyedBeforeLoad = true;
+                viable = false;
+            }
+
+            if (viable) {
+                task.progress = Progress.Calculating;
+                MarkProgress(leftRight, Progress.Calculating);
+                yield return CalculateBallisticSolution(task, powderCount);
+                elevation = BallisticCalculator.GetElevation();
+                if (!IsTaskAlive(task)) {
+                    destroyedBeforeLoad = true;
+                    viable = false;
+                }
+            }
+
+            if (viable && recalculatedWithLoadedPowder && !IsValidElevation(elevation)) {
                 MelonLogger.Warning($"[FCS] {leftRight}: loaded powder cannot solve T{task.targetId}; searching another target.");
                 RequeueTaskFront(task);
                 if (TryParseBulletType(chambered, out var loadedShell)
@@ -1378,11 +1509,7 @@ public class FSC
                     if (leftRight == LeftRight.Left) LeftTask = task;
                     else RightTask = task;
                     powderCount = selectedPowderCount;
-                    yield return BallisticCalculator.SetDistance(task.distance);
-                    yield return BallisticCalculator.SetDirection(task.angel);
-                    yield return BallisticCalculator.SetCharge(powderCount);
-                    yield return BallisticCalculator.SetShellType(task.bulletType);
-                    yield return BallisticCalculator.Calculate();
+                    yield return CalculateBallisticSolution(task, powderCount);
                     elevation = BallisticCalculator.GetElevation();
                 }
                 else if (TryParseBulletType(chambered, out var dumpShell)) {
@@ -1392,10 +1519,20 @@ public class FSC
             }
 
             // 只有采购后库存确实增加，才继续补买药包。
-            while (gunSys.RemainingCharges() < powderCount) {
+            while (viable && gunSys.RemainingCharges() < powderCount) {
+                if (!IsTaskAlive(task)) {
+                    destroyedBeforeLoad = true;
+                    viable = false;
+                    break;
+                }
                 var beforePurchase = gunSys.RemainingCharges();
                 yield return _purchaseDeck.BuyPowders();
                 var afterPurchase = gunSys.RemainingCharges();
+                if (!IsTaskAlive(task)) {
+                    destroyedBeforeLoad = true;
+                    viable = false;
+                    break;
+                }
                 if (afterPurchase <= beforePurchase) {
                     MelonLogger.Error(
                         $"[FCS] {leftRight}: powder purchase did not increase charges. " +
@@ -1419,11 +1556,7 @@ public class FSC
                             else RightTask = task;
                             powderCount = RequiredPowder(task);
                             HaltAutomaticFire($"{leftRight} cannot buy powder; continue current round with {powderCount}/{availablePowder} available charges.");
-                            yield return BallisticCalculator.SetDistance(task.distance);
-                            yield return BallisticCalculator.SetDirection(task.angel);
-                            yield return BallisticCalculator.SetCharge(powderCount);
-                            yield return BallisticCalculator.SetShellType(task.bulletType);
-                            yield return BallisticCalculator.Calculate();
+                            yield return CalculateBallisticSolution(task, powderCount);
                             elevation = BallisticCalculator.GetElevation();
                             MelonLogger.Warning(
                                 $"[FCS] {leftRight}: switched to T{task.targetId} for limited powder. " +
@@ -1449,18 +1582,37 @@ public class FSC
                 }
             }
 
-            task.progress = Progress.SelectingBullet;
-            MarkProgress(leftRight, Progress.SelectingBullet);
-            if (!chamberAlreadyLoaded && !gunSys.HaveBulletInCylinder(task.bulletType)) {
-                if (!gunSys.HaveEmptyShellInCylinder()) {
+            if (viable) {
+                task.progress = Progress.SelectingBullet;
+                MarkProgress(leftRight, Progress.SelectingBullet);
+            }
+            if (viable && !chamberAlreadyLoaded && !gunSys.HaveBulletInCylinder(task.bulletType)) {
+                if (!IsTaskAlive(task)) {
+                    destroyedBeforeLoad = true;
+                    viable = false;
+                }
+                else if (!gunSys.HaveEmptyShellInCylinder()) {
                     task.progress = Progress.Failed;
                     MarkProgress(leftRight, Progress.Failed);
                     viable = false;
                 }
                 else {
-                    yield return _purchaseDeck.BuyShell(task.bulletType, leftRight);
-                    yield return gunSys.WaitUntilBulletInCylinder(task.bulletType, 5f);
-                    if (!gunSys.HaveBulletInCylinder(task.bulletType)) {
+                    if (!_purchaseDeck.CanBuyShell(task.bulletType)) {
+                        MelonLogger.Error($"[FCS] {leftRight}: no purchase card for {task.bulletType}; use existing shells only.");
+                        HaltAutomaticFire($"{leftRight} has no purchase card for {task.bulletType}; existing shells only.");
+                        task.progress = Progress.Failed;
+                        MarkProgress(leftRight, Progress.Failed);
+                        viable = false;
+                    }
+                    else {
+                        yield return _purchaseDeck.BuyShell(task.bulletType, leftRight);
+                        yield return gunSys.WaitUntilBulletInCylinder(task.bulletType, 5f);
+                    }
+                    if (viable && !IsTaskAlive(task)) {
+                        destroyedBeforeLoad = true;
+                        viable = false;
+                    }
+                    if (viable && !gunSys.HaveBulletInCylinder(task.bulletType)) {
                         MelonLogger.Error($"[FCS] {leftRight}: purchased {task.bulletType}, but it did not enter cylinder.");
                         HaltAutomaticFire($"{leftRight} could not buy {task.bulletType}; purchase did not enter cylinder.");
                         task.progress = Progress.Failed;
@@ -1472,6 +1624,16 @@ public class FSC
         }
         finally {
             _deskLock.Release();
+        }
+
+        if (destroyedBeforeLoad) {
+            MelonLogger.Warning($"[FCS] {leftRight}: target T{task.targetId} destroyed during preparation; stop before loading/firing.");
+            task.progress = Progress.Failed;
+            MarkProgress(leftRight, Progress.Failed);
+            FinishTask(task);
+            ReleaseTurretOnce(turret);
+            ReleaseSlot(leftRight);
+            yield break;
         }
 
         if (dumpAfterDesk != null) {
@@ -1556,11 +1718,7 @@ public class FSC
                         powderCount = actualPowder;
                         yield return _deskLock.Acquire();
                         try {
-                            yield return BallisticCalculator.SetDistance(task.distance);
-                            yield return BallisticCalculator.SetDirection(task.angel);
-                            yield return BallisticCalculator.SetCharge(powderCount);
-                            yield return BallisticCalculator.SetShellType(task.bulletType);
-                            yield return BallisticCalculator.Calculate();
+                            yield return CalculateBallisticSolution(task, powderCount);
                             elevation = BallisticCalculator.GetElevation();
                         }
                         finally {
@@ -1590,7 +1748,15 @@ public class FSC
                 }
 
                 if (!recovered && !gunSys.CanFire()) {
-                    MelonLogger.Error($"[FCS] {leftRight}: powder recovery failed; requeue task and release slot.");
+                    if (gunSys.BulletInChamber() != null) {
+                        MelonLogger.Error($"[FCS] {leftRight}: powder recovery failed with loaded shell; keep slot resource-blocked. {GunState(gunSys)}");
+                        CancelTurretReservation(turret);
+                        MarkResourceBlocked(leftRight, task, "powder recovery failed with loaded shell");
+                        TryDispatch();
+                        yield break;
+                    }
+
+                    MelonLogger.Error($"[FCS] {leftRight}: powder recovery failed; requeue task and release slot. {GunState(gunSys)}");
                     task.progress = Progress.Failed;
                     MarkProgress(leftRight, Progress.Failed);
                     RequeueTaskFront(task);
@@ -1602,7 +1768,7 @@ public class FSC
             task.progress = Progress.WaitLoading;
             MarkProgress(leftRight, Progress.WaitLoading);
             turret = MaintainTurretPriorityForLoadedRound(leftRight, task, turret, "during wait loading");
-            MelonLogger.Msg($"[FCS] {leftRight}: waiting CanFire after powder load. actualPowder={gunSys.SelectedPowderCount()}");
+            MelonLogger.Msg($"[FCS] {leftRight}: waiting CanFire after powder load. {GunState(gunSys)}");
             var waitCanFire = 0f;
             var canFireRecoveryTried = false;
             while (!gunSys.CanFire()) {
@@ -1619,7 +1785,7 @@ public class FSC
                 if (waitCanFire >= 8f) {
                     var timeoutChamber = gunSys.BulletInChamber();
                     var timeoutPowder = gunSys.SelectedPowderCount();
-                    MelonLogger.Warning($"[FCS] {leftRight}: CanFire timeout. chamber={timeoutChamber ?? "empty"}, actualPowder={timeoutPowder}");
+                    MelonLogger.Warning($"[FCS] {leftRight}: CanFire timeout. {GunState(gunSys)}");
                     if (timeoutChamber == task.bulletType.ToString() && timeoutPowder >= powderCount) {
                         if (!canFireRecoveryTried) {
                             canFireRecoveryTried = true;
@@ -1627,7 +1793,11 @@ public class FSC
                             yield return gunSys.CompletePowderSelectionFrom(timeoutPowder, powderCount);
                         }
                         else {
-                            MelonLogger.Warning($"[FCS] {leftRight}: loaded state still matches but CanFire is false; keep current slot blocked and wait.");
+                            MelonLogger.Warning($"[FCS] {leftRight}: loaded state still matches but CanFire is false; park this barrel and free turret. {GunState(gunSys)}");
+                            CancelTurretReservation(turret);
+                            MarkResourceBlocked(leftRight, task, "loaded state matches but CanFire stayed false");
+                            TryDispatch();
+                            yield break;
                         }
                         task.progress = Progress.WaitLoading;
                         MarkProgress(leftRight, Progress.WaitLoading);
@@ -1832,7 +2002,10 @@ public class FSC
     /// </summary>
     private void StartTurretReservation(LeftRight leftRight, ArtilleryTask task, TurretReservation res) {
         res.TargetAngle = task.angel;
-        _runningCoroutines.Add((MelonCoroutines.Start(ReserveTurretAndRotate(leftRight, task, res)), leftRight));
+        var handle = MelonCoroutines.Start(ReserveTurretAndRotate(leftRight, task, res));
+        if (handle != null) {
+            _runningCoroutines.Add((handle, leftRight));
+        }
     }
 
     private IEnumerator ReserveTurretAndRotate(LeftRight leftRight, ArtilleryTask task, TurretReservation res) {

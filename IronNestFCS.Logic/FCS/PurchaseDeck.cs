@@ -6,47 +6,94 @@ using System.Collections;
 namespace IronNestFCS.Logic.FCS;
 
 public class PurchaseDeck {
-    private Transform? _heCard;
-    private Transform? _apCard;
-    private Transform? _starCard;
-    private Transform? _smkCard;
-    private Transform? _hcheCard;
+    private static readonly HashSet<BulletType> CommonShellCards = new() {
+        BulletType.AP,
+        BulletType.HCHE,
+        BulletType.HE,
+        BulletType.STAR,
+        BulletType.SMK,
+        BulletType.APHE,
+        BulletType.ATMC,
+    };
+
+    private readonly Dictionary<BulletType, Transform> _shellCards = new();
     private Transform? _powderCard;
     private LookAtTarget? _buyButton;
     
     
     public bool TryBind() {
+        _shellCards.Clear();
+        _powderCard = null;
         var requisitionConsole = GameObject.Find("Requisition Console").transform;
         var cards = requisitionConsole.GetComponentsInChildren<PunchcardRuntime>();
         foreach (var card in cards) {
-            MelonLogger.Msg($"[FCS] PurchaseDeck: Found card {card.CurrentDefinition.ID}");
-            switch (card.CurrentDefinition.ID) {
-                case "HEShell":
-                    _heCard = card.transform;
-                    break;
-                case "APShell":
-                    _apCard = card.transform;
-                    break;
-                case "STARShell":
-                    _starCard = card.transform;
-                    break;
-                case "SMOKEShell":
-                    _smkCard = card.transform;
-                    break;
-                case "HCHEShell":
-                    _hcheCard = card.transform;
-                    break;
-                case "PowderCharges":
-                    _powderCard = card.transform;
-                    break;
-                default:
-                    break;
+            var cardId = card.CurrentDefinition.ID;
+            MelonLogger.Msg($"[FCS] PurchaseDeck: Found card {cardId}");
+            if (cardId == "PowderCharges") {
+                _powderCard = card.transform;
+                continue;
+            }
+
+            if (TryParseShellCard(cardId, out var shell)) {
+                _shellCards[shell] = card.transform;
+                if (!CommonShellCards.Contains(shell)) {
+                    MelonLogger.Warning($"[FCS] PurchaseDeck: found uncommon shell purchase card {cardId} -> {shell}.");
+                }
+                continue;
+            }
+
+            if (cardId.EndsWith("Shell", StringComparison.OrdinalIgnoreCase)) {
+                MelonLogger.Warning($"[FCS] PurchaseDeck: shell card {cardId} is not mapped to BulletType.");
             }
         }
+
+        LogAvailableShellCards();
         
         _buyButton = requisitionConsole.FindChild("Universal Button").GetComponent<LookAtTarget>();
         
         return true;
+    }
+
+    public bool CanBuyShell(BulletType type) {
+        return GetShellCard(type) != null;
+    }
+
+    private Transform? GetShellCard(BulletType type) {
+        return _shellCards.TryGetValue(type, out var card) ? card : null;
+    }
+
+    private static bool TryParseShellCard(string cardId, out BulletType shell) {
+        shell = default;
+        if (!cardId.EndsWith("Shell", StringComparison.OrdinalIgnoreCase)) {
+            return false;
+        }
+
+        var shellCode = cardId[..^"Shell".Length].ToUpperInvariant();
+        if (shellCode == "SMOKE") {
+            shellCode = "SMK";
+        }
+
+        return Enum.TryParse(shellCode, ignoreCase: true, out shell) && shell != BulletType.EMPT;
+    }
+
+    private void LogAvailableShellCards() {
+        var common = _shellCards.Keys
+            .Where(CommonShellCards.Contains)
+            .OrderBy(shell => (int)shell)
+            .ToList();
+        var uncommon = _shellCards.Keys
+            .Where(shell => !CommonShellCards.Contains(shell))
+            .OrderBy(shell => (int)shell)
+            .ToList();
+
+        MelonLogger.Msg($"[FCS] PurchaseDeck: purchasable common shells: {FormatShellList(common)}");
+        if (uncommon.Count > 0) {
+            MelonLogger.Warning($"[FCS] PurchaseDeck: purchasable uncommon shells: {FormatShellList(uncommon)}");
+        }
+    }
+
+    private static string FormatShellList(IReadOnlyCollection<BulletType> shells) {
+        return shells.Count == 0 ? "none" : string.Join(", ", shells);
     }
     
     private DialInteractable GetLeftRightDial() {
@@ -55,14 +102,7 @@ public class PurchaseDeck {
     }
 
     public IEnumerator BuyShell(BulletType type, LeftRight leftRight) {
-        var card = type switch {
-            BulletType.AP => _apCard,
-            BulletType.HE => _heCard,
-            BulletType.STAR => _starCard,
-            BulletType.SMK => _smkCard,
-            BulletType.HCHE => _hcheCard,
-            _ => null
-        };
+        var card = GetShellCard(type);
         if (card == null) {
             MelonLogger.Error($"[FCS] BuyShell: Can't find {type} card");
             yield break;

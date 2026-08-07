@@ -9,6 +9,10 @@ namespace IronNestFCS.Logic;
 
 public class FcsModule : IFcsModule
 {
+    private const float ApEffectiveRadiusKm = 0.11f;
+    private const float ApProtectedSafeRadiusKm = 0.15f;
+    private const float ApProtectScanRadiusKm = ApEffectiveRadiusKm + ApProtectedSafeRadiusKm + 0.05f;
+
     private readonly FSC fcs = new();
     private FcsWindow? window;
     private TacticalRadar? radar;
@@ -36,7 +40,11 @@ public class FcsModule : IFcsModule
             MelonLogger.Warning($"[FCS] Auto sweep disabled: {fcs.AutomaticFireHaltReason}");
         }
 
-        if (window != null) window.AutoSweepEnabled = autoSweep;
+        if (window != null)
+        {
+            window.AutoSweepEnabled = autoSweep;
+            window.AutoMarkerEnabled = radar?.AutoPlaceMarkers ?? true;
+        }
 
         if (autoSweep && radar != null && fcs.IsBound)
         {
@@ -75,7 +83,7 @@ public class FcsModule : IFcsModule
             if (radar != null) {
                 radar.AutoPlaceMarkers = !radar.AutoPlaceMarkers;
                 fcs.ManualMarkerPriorityMode = !radar.AutoPlaceMarkers;
-                MelonLogger.Msg($"[FCS] Marker mode: {(radar.AutoPlaceMarkers ? "Auto" : "Manual priority")}");
+                MelonLogger.Msg($"[FCS] 标点模式: {(radar.AutoPlaceMarkers ? "自动标点" : "手动优先")}");
                 if (radar.AutoPlaceMarkers) {
                     radar.ForceScan();
                 }
@@ -84,6 +92,11 @@ public class FcsModule : IFcsModule
         }
         if (kb.numpadMinusKey.wasPressedThisFrame) { AdjustAllValves(0f); return; }
         if (kb.numpadPlusKey.wasPressedThisFrame) { AdjustAllValves(999f); return; }
+        if (kb.numpadPeriodKey.wasPressedThisFrame || (ctrl && kb.periodKey.wasPressedThisFrame))
+        {
+            fcs.BallisticCalculator.DebugStepShellDial(ctrl ? -1 : 1);
+            return;
+        }
         if (kb.numpad7Key.wasPressedThisFrame || (ctrl && kb.digit7Key.wasPressedThisFrame)) { fcs.AbortGun(LeftRight.Left); return; }
         if (kb.numpad8Key.wasPressedThisFrame || (ctrl && kb.digit8Key.wasPressedThisFrame)) { fcs.AbortGun(LeftRight.Right); return; }
         if (kb.numpad9Key.wasPressedThisFrame || (ctrl && kb.digit9Key.wasPressedThisFrame)) { fcs.AbortAllGuns(); return; }
@@ -139,9 +152,9 @@ public class FcsModule : IFcsModule
         PruneSweptTargets(alive);
         foreach (var unit in SortByTargetPriority(alive))
         {
-            if (unit.Location != null && swept.Add(unit.Location))
+            if (unit.Location != null && !swept.Contains(unit.Location) && EnqueueSweepUnit(unit, swept.Count + 1))
             {
-                EnqueueSweepUnit(unit, swept.Count);
+                swept.Add(unit.Location);
             }
         }
     }
@@ -164,25 +177,114 @@ public class FcsModule : IFcsModule
         if (forceRequeueAlive)
         {
             swept.Clear();
-            foreach (var unit in alive)
-            {
-                if (unit.Location != null) swept.Add(unit.Location);
-            }
         }
         var sorted = SortByTargetPriority(alive);
         for (var i = 0; i < sorted.Count; i++)
         {
-            EnqueueSweepUnit(sorted[i], i + 1);
+            var location = sorted[i].Location;
+            if (EnqueueSweepUnit(sorted[i], i + 1) && location != null)
+            {
+                swept.Add(location);
+            }
         }
     }
 
     /// <summary>任务统一普通入队；FSC 内部会按目标优先级排序，同级再用角度近远提速。</summary>
-    private void EnqueueSweepUnit(UnitEntry unit, int id)
+    private bool EnqueueSweepUnit(UnitEntry unit, int id)
     {
-        fcs.FireAtWorldPos(id, unit.WorldPos, unit.Location);
+        var worldPos = unit.WorldPos;
+        var preserveAimPoint = false;
+        if (fcs.SelectedBulletType == BulletType.AP
+            && !TryResolveSafeApAimPoint(unit, out worldPos))
+        {
+            return false;
+        }
+        if (Vector3.Distance(worldPos, unit.WorldPos) > 0.01f)
+        {
+            preserveAimPoint = true;
+        }
+
+        fcs.FireAtWorldPos(id, worldPos, unit.Location, preserveAimPoint);
+        return true;
     }
 
     /// <summary>按杀伤优先级排序；角度近远不在这里抢高星目标，只在 FSC 队列中作为同级优化。</summary>
+    private bool TryResolveSafeApAimPoint(UnitEntry target, out Vector3 aimWorldPos)
+    {
+        aimWorldPos = target.WorldPos;
+        if (radar == null) return true;
+        var targetKm = TacticalRadar.GetEntityKmPos(target);
+
+        var protectedKms = radar.ProtectedUnits
+            .Where(unit => unit.IsAlive)
+            .Select(unit => (km: TacticalRadar.GetEntityKmPos(unit), unit.Name))
+            .Where(item => Vector2.Distance(item.km, targetKm) <= ApProtectScanRadiusKm)
+            .ToList();
+        if (protectedKms.Count == 0) return true;
+
+        if (IsApAimSafe(targetKm, targetKm, protectedKms.Select(item => item.km)))
+        {
+            return true;
+        }
+
+        var bestKm = targetKm;
+        var bestOffset = float.MaxValue;
+        var bestMinProtectedDistance = 0f;
+        const int samples = 32;
+        for (var ring = 1; ring <= 11; ring++)
+        {
+            var radius = ApEffectiveRadiusKm * ring / 11f;
+            for (var i = 0; i < samples; i++)
+            {
+                var angle = Mathf.PI * 2f * i / samples;
+                var candidate = targetKm + new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * radius;
+                if (!MapTable.IsKmInsideTacticalMap(candidate)) continue;
+                if (Vector2.Distance(candidate, targetKm) > ApEffectiveRadiusKm) continue;
+
+                var minProtectedDistance = protectedKms.Min(item => Vector2.Distance(candidate, item.km));
+                if (minProtectedDistance < ApProtectedSafeRadiusKm) continue;
+
+                var offset = Vector2.Distance(candidate, targetKm);
+                if (offset < bestOffset
+                    || Mathf.Approximately(offset, bestOffset) && minProtectedDistance > bestMinProtectedDistance)
+                {
+                    bestKm = candidate;
+                    bestOffset = offset;
+                    bestMinProtectedDistance = minProtectedDistance;
+                }
+            }
+            if (bestOffset < float.MaxValue) break;
+        }
+
+        if (bestOffset >= float.MaxValue)
+        {
+            MelonLogger.Warning(
+                $"[FCS] AP friendly-fire guard: skip {target.Name}; " +
+                $"protected units near impact={protectedKms.Count}, targetKm=({targetKm.x:F2},{targetKm.y:F2}).");
+            return false;
+        }
+
+        if (!fcs.MapTable.TryMapKmToWorldPos(target.WorldPos, bestKm, out aimWorldPos))
+        {
+            return false;
+        }
+
+        MelonLogger.Warning(
+            $"[FCS] AP friendly-fire guard: offset {target.Name} by {bestOffset:F2}km; " +
+            $"nearest protected={bestMinProtectedDistance:F2}km.");
+        return true;
+    }
+
+    private static bool IsApAimSafe(Vector2 targetKm, Vector2 aimKm, IEnumerable<Vector2> protectedKms)
+    {
+        if (Vector2.Distance(aimKm, targetKm) > ApEffectiveRadiusKm)
+        {
+            return false;
+        }
+
+        return protectedKms.All(km => Vector2.Distance(aimKm, km) >= ApProtectedSafeRadiusKm);
+    }
+
     private static List<UnitEntry> SortByTargetPriority(IEnumerable<UnitEntry> units)
     {
         return units

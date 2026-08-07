@@ -38,6 +38,7 @@ public class TacticalRadar
     }
 
     private readonly List<UnitEntry> units = new();
+    private readonly List<UnitEntry> protectedUnits = new();
     private float lastScanTime;
     private const float ScanInterval = 3f;
 
@@ -50,7 +51,8 @@ public class TacticalRadar
 
     public TacticalRadar(FSC fcs) => this.fcs = fcs;
 
-    public List<UnitEntry> AliveUnits => units.Where(u => u.IsAlive).ToList();
+    public List<UnitEntry> AliveUnits => units.Where(u => u.IsAlive && IsAutoTargetable(u)).ToList();
+    public List<UnitEntry> ProtectedUnits => protectedUnits.Where(u => u.IsAlive).ToList();
 
     public void Update()
     {
@@ -83,8 +85,9 @@ public class TacticalRadar
     private void ScanForUnitsInternal()
     {
         units.Clear();
+        protectedUnits.Clear();
 
-        var fireMissionRoot = GameObject.Find("Fire Mission Root")?.transform;
+        var fireMissionRoot = FindFireMissionRoot();
         var turretRef = GameObject.Find("Player Turret Piece")?.transform;
 
         Log($"[Radar] Scan start. FireMissionRoot={fireMissionRoot != null} Turret={turretRef != null}");
@@ -95,20 +98,25 @@ public class TacticalRadar
             for (int i = 0; i < fireMissionRoot.childCount; i++)
             {
                 var child = fireMissionRoot.GetChild(i);
+                if (IsNonCombatRadarObjectName(child.name))
+                {
+                    continue;
+                }
                 var loc = child.GetComponent<EntityLocation>();
                 if (loc == null) continue;
                 bool hostile = IsHostile(loc, child);
                 bool isAlive = IsUnitAlive(loc, child.gameObject);
                 var entityInfo = GetEntityInfo(loc);
                 Log($"[Radar] Entity: {child.name}  hostile={hostile}  alive={isAlive}  icon={entityInfo.icon}  role={entityInfo.role}  roleNum={entityInfo.roleNum}");
-                if (!hostile) continue;
-                units.Add(new UnitEntry
+                var entry = new UnitEntry
                 {
                     Name = child.name,
                     WorldPos = child.position,
                     IsAlive = isAlive,
                     Location = loc
-                });
+                };
+                if (hostile) units.Add(entry);
+                else if (IsProtectedUnitNameOrRole(child.name, entityInfo.icon, entityInfo.role, entityInfo.roleNum)) protectedUnits.Add(entry);
             }
         }
 
@@ -118,43 +126,79 @@ public class TacticalRadar
         {
             if (obj == null) continue;
             var n = obj.name;
-            if ((n.StartsWith("Enemy") || n.Contains("Tgt_") || n.Contains("Target_"))
-                && obj.transform != null)
+            if (IsNonCombatRadarObjectName(n))
             {
-                var loc = obj.GetComponent<EntityLocation>();
-                if (loc != null) { if (!IsHostile(loc, obj.transform)) continue; }
-                if (!units.Exists(u => u.Location == loc))
+                continue;
+            }
+            var loc = obj.GetComponent<EntityLocation>();
+            var nameCandidate = IsNameFallbackTargetCandidate(n);
+            if ((loc != null || nameCandidate) && obj.transform != null)
+            {
+                if (loc != null) {
+                    var hostile = IsHostile(loc, obj.transform);
+                    if (!hostile) {
+                        var info = GetEntityInfo(loc);
+                        if (IsUnitAlive(loc, obj)
+                            && IsProtectedUnitNameOrRole(n, info.icon, info.role, info.roleNum)
+                            && !protectedUnits.Any(unit => unit.Location == loc)) {
+                            protectedUnits.Add(new UnitEntry
+                            {
+                                Name = n,
+                                WorldPos = obj.transform.position,
+                                IsAlive = true,
+                                Location = loc
+                            });
+                        }
+                        continue;
+                    }
+                }
+                if (!IsKnownUnit(loc, obj))
                 {
                     nameMatchCount++;
                     Log($"[Radar] NameMatch: {n}  hasEntityLocation={loc != null}  activeInHierarchy={obj.activeInHierarchy}");
-                    units.Add(new UnitEntry
+                    var entry = new UnitEntry
                     {
                         Name = n,
                         WorldPos = obj.transform.position,
                         IsAlive = loc != null ? IsUnitAlive(loc, obj) : obj.activeInHierarchy,
                         Location = loc
-                    });
+                    };
+                    units.Add(entry);
                 }
             }
         }
 
         Log($"[Radar] Total FireMission entities: {units.Count - nameMatchCount}  NameMatch entities: {nameMatchCount}  Total: {units.Count}");
 
-        var alive = SortByTargetPriority(units.Where(u => u.IsAlive));
+        var alive = SortByTargetPriority(units.Where(u => u.IsAlive && IsAutoTargetable(u)));
         Log($"[Radar] Alive hostile count: {alive.Count}");
+        MelonLogger.Msg($"[Radar] Alive hostile count={alive.Count}, protected={ProtectedUnits.Count}, autoMarkers={AutoPlaceMarkers}");
         for (int i = 0; i < Mathf.Min(alive.Count, 4); i++)
         {
             Vector2 km = GetEntityKmPos(alive[i]);
             Log($"[Radar] Marker {i + 1} -> {alive[i].Name} km=({km.x:F2},{km.y:F2})");
         }
+        for (int i = 0; i < Mathf.Min(alive.Count, 12); i++)
+        {
+            var unit = alive[i];
+            var km = GetEntityKmPos(unit);
+            MelonLogger.Msg(
+                $"[Radar] #{i + 1} {unit.Name} priority={TargetPriority.GetPriority(unit.Location)} " +
+                $"stars={TargetPriority.GetStars(unit.Location)} loc={LocationId(unit.Location)} " +
+                $"world=({unit.WorldPos.x:F2},{unit.WorldPos.y:F2},{unit.WorldPos.z:F2}) km=({km.x:F2},{km.y:F2})");
+        }
         if (AutoPlaceMarkers)
         {
             for (int i = 1; i <= 4; i++)
             {
-                if (i <= alive.Count)
+                if (i <= alive.Count) {
                     fcs.MapTable.SetMarkerWorldPos(i, alive[i - 1].WorldPos, alive[i - 1].Location);
-                else
+                    MelonLogger.Msg($"[Radar] Auto marker T{i} -> {alive[i - 1].Name} loc={LocationId(alive[i - 1].Location)}");
+                }
+                else {
                     fcs.MapTable.ResetMarker(i);
+                    MelonLogger.Msg($"[Radar] Auto marker T{i} -> none, standby");
+                }
             }
         }
         else
@@ -164,6 +208,26 @@ public class TacticalRadar
 
         fcs.RefreshQueuedTargetsFromRadar(alive);
         FlushLog();
+    }
+
+    private static Transform? FindFireMissionRoot()
+    {
+        var root = GameObject.Find("Fire Mission Root")?.transform;
+        if (root != null) return root;
+        return UnityEngine.Object.FindObjectOfType<FireMission>()?.transform;
+    }
+
+    private bool IsKnownUnit(EntityLocation? loc, GameObject obj)
+    {
+        if (loc != null) {
+            return units.Exists(u => u.Location == loc);
+        }
+        return units.Exists(u => u.Location == null && u.Name == obj.name && u.WorldPos == obj.transform.position);
+    }
+
+    private static string LocationId(EntityLocation? location)
+    {
+        return location == null ? "null" : location.Pointer.ToString();
     }
 
     public void OnGui()
@@ -188,14 +252,14 @@ public class TacticalRadar
 
         var oldColor = GUI.color;
         GUI.color = ClrTitle;
-        GUI.Label(new Rect(x, y, w, h), $"Targets ({aliveUnits.Count} alive) [{(AutoPlaceMarkers ? "Auto" : "Manual")}]");
+        GUI.Label(new Rect(x, y, w, h), $"目标 ({aliveUnits.Count} 存活) [{(AutoPlaceMarkers ? "自动" : "手动")}]");
         GUI.color = oldColor;
         y += lineH + 2f;
 
         if (aliveUnits.Count == 0 && deadUnits.Count == 0)
         {
             GUI.color = ClrLabel;
-            GUI.Label(new Rect(x, y, w, h), "  No targets found");
+            GUI.Label(new Rect(x, y, w, h), "  未发现目标");
             GUI.color = oldColor;
             return;
         }
@@ -211,7 +275,7 @@ public class TacticalRadar
         if (aliveUnits.Count > 8)
         {
             GUI.color = ClrLabel;
-            GUI.Label(new Rect(x, y, w, h), $"  ... +{aliveUnits.Count - 8} more alive");
+            GUI.Label(new Rect(x, y, w, h), $"  ... 另有 {aliveUnits.Count - 8} 个存活");
             GUI.color = oldColor;
             y += lineH;
         }
@@ -220,7 +284,7 @@ public class TacticalRadar
         {
             y += 2f;
             GUI.color = ClrLabel;
-            GUI.Label(new Rect(x, y, w, h), $"Destroyed ({deadUnits.Count}):");
+            GUI.Label(new Rect(x, y, w, h), $"已摧毁 ({deadUnits.Count}):");
             GUI.color = oldColor;
             y += lineH;
 
@@ -235,7 +299,7 @@ public class TacticalRadar
             if (deadUnits.Count > 3)
             {
                 GUI.color = ClrLabel;
-                GUI.Label(new Rect(x, y, w, h), $"  ... +{deadUnits.Count - 3} more");
+                GUI.Label(new Rect(x, y, w, h), $"  ... 另有 {deadUnits.Count - 3} 个");
                 GUI.color = oldColor;
             }
         }
@@ -244,7 +308,7 @@ public class TacticalRadar
     private static readonly List<string> _logLines = new();
     private static bool _logWritten;
     private static bool _onceLogged;
-    private static Vector2 GetEntityKmPos(UnitEntry unit)
+    public static Vector2 GetEntityKmPos(UnitEntry unit)
     {
         if (unit.Location != null)
         {
@@ -274,6 +338,68 @@ public class TacticalRadar
             .OrderByDescending(u => TargetPriority.GetPriority(u.Location))
             .ThenByDescending(u => TargetPriority.GetStars(u.Location))
             .ToList();
+    }
+
+    private static bool IsAutoTargetable(UnitEntry unit)
+    {
+        if (IsNonCombatRadarObjectName(unit.Name))
+        {
+            return false;
+        }
+
+        // 自动开火优先依赖 EntityLocation；没有实体定位时只允许明确的敌方目标名兜底。
+        return unit.Location != null || IsNameFallbackTargetCandidate(unit.Name);
+    }
+
+    private static bool IsNameFallbackTargetCandidate(string name)
+    {
+        var n = name.ToLowerInvariant();
+        if (IsNonCombatRadarObjectName(name))
+        {
+            return false;
+        }
+
+        return n.Contains("enemytarget")
+               || n.StartsWith("tgt_")
+               || n.StartsWith("target_");
+    }
+
+    private static bool IsNonCombatRadarObjectName(string name)
+    {
+        var n = name.ToLowerInvariant();
+        return n.Contains("killtoken")
+               || n.Contains("killtokens")
+               || n.Contains("fmod")
+               || n.Contains("sfx")
+               || n.Contains("audio")
+               || n.Contains("sound")
+               || n.Contains("impact")
+               || n.Contains("target_hit")
+               || n.Contains("target_impact")
+               || n.Contains("maptoken")
+               || n.Contains("draggableitemgridarea")
+               || n.Contains("gridarea")
+               || n.Contains("marker")
+               || n.Contains("reward")
+               || n.Contains("score")
+               || n.Contains("label")
+               || n.Contains("icon");
+    }
+
+    private static bool IsProtectedUnitNameOrRole(string name, string icon, string role, int roleNum)
+    {
+        var text = $"{name} {icon} {role}".ToLowerInvariant();
+        if (text.Contains("reference") || text.Contains("refrence")) return false;
+        if (text.Contains("friendly") || text.Contains("frendly")) return true;
+        if (text.Contains("civilian") || text.Contains("civ")) return true;
+        if (text.Contains("hospital")) return true;
+        if (text.Contains("police")) return true;
+        if (text.Contains("ally")) return true;
+        if (text.Contains("spotter") || text.Contains("recon")) return true;
+        if (text.Contains("propaganda")) return true;
+
+        const int roleAlly = 2;
+        return roleNum >= 0 && (roleNum & roleAlly) != 0;
     }
 
     private static void FlushLog()

@@ -2,6 +2,6 @@
     <PropertyGroup>
         <!-- 游戏根目录。普通用户只需要把这里改成自己的安装路径，不要写到 Mods/UserData/UserLibs 子目录。 -->
         <!-- 也可以构建时临时覆盖：dotnet build IronNestFCS.sln -c Release -p:GameDir="你的游戏路径" -->
-        <GameDir Condition="'$(GameDir)' == ''">D:\Steam\steamapps\common\IRON NEST Heavy Turret Simulator Demo</GameDir>
+        <GameDir Condition="'$(GameDir)' == ''">D:\Steam\steamapps\common\Iron Nest Heavy Turret Simulator</GameDir>
     </PropertyGroup>
 </Project>
