@@ -28,7 +28,6 @@ public class PurchaseDeck {
         var cards = requisitionConsole.GetComponentsInChildren<PunchcardRuntime>();
         foreach (var card in cards) {
             var cardId = card.CurrentDefinition.ID;
-            MelonLogger.Msg($"[FCS] PurchaseDeck: Found card {cardId}");
             if (cardId == "PowderCharges") {
                 _powderCard = card.transform;
                 continue;

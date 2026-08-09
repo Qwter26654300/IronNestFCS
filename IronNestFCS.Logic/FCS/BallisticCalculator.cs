@@ -10,6 +10,9 @@ namespace IronNestFCS.Logic.FCS;
 public class BallisticCalculator {
     private const int ShellDialMin = 0;
     private const int ShellDialMax = 21;
+    private const int TargetDialMin = 0;
+    private const int TargetDialMax = 21;
+    private const float TargetDialSettleSeconds = 1.25f;
 
     private DialInteractable? distanceDial;
     private DialInteractable? chargeDial;
@@ -116,7 +119,7 @@ public class BallisticCalculator {
         var matches = ShellTextMatches(type, displayed);
         if (!matches)
         {
-            MelonLogger.Warning($"[FCS] Ballistic shell mismatch: expected={type}, mappedValue={GetShellDialValue(type):F0}, displayed={displayed ?? "unknown"}; use Numpad . to inspect shell dial mapping.");
+            MelonLogger.Warning($"[FCS] Ballistic shell mismatch: expected={type}, mappedValue={GetShellDialValue(type):F0}, displayed={displayed ?? "unknown"}.");
         }
     }
 
@@ -131,8 +134,11 @@ public class BallisticCalculator {
             }
             yield break;
         }
-        targetDial.SetDialValue(value);
-        yield return new WaitForSeconds(0.2f);
+        var dialValue = Mathf.Clamp(value, TargetDialMin, TargetDialMax);
+        targetDial.SetDialValue(dialValue);
+        yield return new WaitForSeconds(TargetDialSettleSeconds);
+        targetDial.SetDialValue(dialValue);
+        yield return new WaitForSeconds(0.25f);
     }
 
     public void DebugStepShellDial(int delta)
@@ -179,6 +185,7 @@ public class BallisticCalculator {
         };
     }
 
+    // 弹种旋钮在不同版本里可能变动；这些深度日志/校准函数平时不主动调用，保留给后续排查映射用。
     private void LogShellState(string stage, BulletType? expected)
     {
         var dial = DescribeDial(shellDial);
@@ -485,7 +492,7 @@ public class BallisticCalculator {
         return string.Join(", ", parts);
     }
 
-    private static string DescribeObjectDeep(object? obj)
+    private static string DescribeObjectDeep(object? obj, int maxParts = 80)
     {
         if (obj == null) return "null";
         var parts = new List<string>();
@@ -504,7 +511,7 @@ public class BallisticCalculator {
                     parts.Add($"{prop.Name}={FormatDeepValue(value)}");
                 }
                 catch { }
-                if (parts.Count >= 40) break;
+                if (parts.Count >= maxParts / 2) break;
             }
             foreach (var field in type.GetFields(flags))
             {
@@ -515,7 +522,7 @@ public class BallisticCalculator {
                     parts.Add($"{field.Name}={FormatDeepValue(value)}");
                 }
                 catch { }
-                if (parts.Count >= 80) break;
+                if (parts.Count >= maxParts) break;
             }
         }
         catch (Exception ex)

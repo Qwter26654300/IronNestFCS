@@ -9,11 +9,11 @@ public class FcsWindow
     private readonly FSC fcs;
 
     private bool showWindow = true;
-    private Rect panelRect = new(20, 20, 290, 140);
+    private Rect panelRect = new(20, 20, 310, 150);
 
     private static readonly Color ClrTitle = new(0.96f, 0.65f, 0.14f);
     private static readonly Color ClrLabel = new(0.72f, 0.65f, 0.55f);
-    private static readonly Color ClrIdle = new(0.35f, 0.50f, 0.35f);
+    private static readonly Color ClrIdle = Color.green;
     private static readonly Color ClrActive = new(0.27f, 0.72f, 0.82f);
     private static readonly Color ClrWarning = new(0.96f, 0.65f, 0.14f);
     private static readonly Color ClrFailed = new(0.83f, 0.18f, 0.18f);
@@ -31,8 +31,8 @@ public class FcsWindow
     {
         if (!showWindow) return;
 
-        float h = 22f;
-        float lineH = h + 2f;
+        float h = 24f;
+        float lineH = h + 4f;
 
         float extra = 0f;
         if (fcs.LeftTask != null) extra += lineH * 3;
@@ -55,30 +55,30 @@ public class FcsWindow
 
         var oldColor = GUI.color;
         GUI.color = ClrTitle;
-        GUI.Label(new Rect(x, y, w, h), "IronNest FCS");
+        DrawLabel(new Rect(x, y, w, h), "IronNest FCS", 15);
         GUI.color = oldColor;
         y += lineH;
 
         if (AutoSweepEnabled)
         {
             GUI.color = ClrSweep;
-            GUI.Label(new Rect(x, y, w, h), "[扫荡 开]");
+            DrawLabel(new Rect(x, y, w, h), "[扫荡 开]", 14);
             GUI.color = oldColor;
             y += lineH;
         }
 
-        GUI.color = AutoMarkerEnabled ? ClrLabel : ClrWarning;
-        GUI.Label(new Rect(x, y, w, h), $"标点: {(AutoMarkerEnabled ? "自动标点" : "手动优先")}");
+        GUI.color = AutoMarkerEnabled ? ClrWhite : ClrWarning;
+        DrawLabel(new Rect(x, y, w, h), $"标点: {(AutoMarkerEnabled ? "自动标点" : "手动优先")}", 14);
         GUI.color = oldColor;
         y += lineH;
 
         if (fcs.AutomaticFireHalted)
         {
             GUI.color = ClrFailed;
-            GUI.Label(new Rect(x, y, w, h), "[停火] 自动流程已停止");
+            DrawLabel(new Rect(x, y, w, h), "[停火] 自动流程已停止", 14);
             y += lineH;
             GUI.color = ClrWarning;
-            GUI.Label(new Rect(x, y, w, h), DisplayHaltReason(fcs.AutomaticFireHaltReason));
+            DrawLabel(new Rect(x, y, w, h), DisplayHaltReason(fcs.AutomaticFireHaltReason), 13);
             GUI.color = oldColor;
             y += lineH;
         }
@@ -88,9 +88,9 @@ public class FcsWindow
 
         if (!fcs.IsBound)
         {
-            GUI.Label(new Rect(x, y, w, h), "等待场景...");
+            DrawLabel(new Rect(x, y, w, h), "等待场景...", 14);
             y += lineH;
-            GUI.Label(new Rect(x, y, w, h), "按 F9 重新加载");
+            DrawLabel(new Rect(x, y, w, h), "按 F9 重新加载", 14);
             return;
         }
 
@@ -101,16 +101,17 @@ public class FcsWindow
         DrawDivider(x, y, w);
         y += 4f;
 
-        GUI.color = ClrLabel;
-        GUI.Label(new Rect(x, y, w, h), $"队列: {fcs.PendingCount}");
+        GUI.color = ClrWhite;
+        DrawLabel(new Rect(x, y, w, h), $"队列: {fcs.PendingCount}", 14);
         GUI.color = oldColor;
         y += lineH;
 
         foreach (var item in queuePreview)
         {
             var marker = item.manualPriority ? "M" : " ";
-            GUI.Label(new Rect(x, y, w, h),
-                $"{marker} T{item.targetId}  {ConvertPosition(item.position)}  {item.angel,5:F1}°/{item.distance,5:F2}km  {item.bulletType}");
+            DrawLabel(new Rect(x, y, w, h),
+                $"{marker} T{item.targetId}  {ConvertPosition(item.position)}  {item.angel,5:F1}°/{item.distance,5:F2}km  {item.bulletType}",
+                13);
             y += lineH;
         }
     }
@@ -122,7 +123,7 @@ public class FcsWindow
         if (task == null)
         {
             GUI.color = ClrIdle;
-            GUI.Label(new Rect(x, y, w, h), $"{label} 空闲");
+            DrawLabel(new Rect(x, y, w, h), $"{label} 空闲", 14);
             GUI.color = oldColor;
             return y + lineH;
         }
@@ -137,21 +138,23 @@ public class FcsWindow
 
         GUI.color = stateColor;
         var marker = task.manualPriority ? "M " : "";
-        GUI.Label(new Rect(x, y, w, h), $"{label} {marker}T{task.targetId}  {task.bulletType}  {ProgressText(task.progress)}");
+        DrawLabel(new Rect(x, y, w, h), $"{label} {marker}T{task.targetId}  {task.bulletType}  {ProgressText(task.progress)}", 14);
         GUI.color = oldColor;
         y += lineH;
 
-        GUI.color = ClrLabel;
-        GUI.Label(new Rect(x + 12f, y, w - 12f, h),
-            $"目标: {task.angel:F1}° / {task.distance:F2}km");
+        GUI.color = Color.red;
+        DrawLabel(new Rect(x + 12f, y, w - 12f, h),
+            $"目标: {task.angel:F1}° / {task.distance:F2}km",
+            13);
         GUI.color = oldColor;
         y += lineH;
 
         float el = FcsCalc.Elevation(task.distance);
         int chg = FcsCalc.Charge(task.distance);
-        GUI.color = ClrWarning;
-        GUI.Label(new Rect(x + 12f, y, w - 12f, h),
-            $"射击: {el:F2}°  |  {chg}号药");
+        GUI.color = Color.yellow;
+        DrawLabel(new Rect(x + 12f, y, w - 12f, h),
+            $"射击: {el:F2}°  |  {chg}号药",
+            13);
         GUI.color = oldColor;
         y += lineH;
 
@@ -199,6 +202,14 @@ public class FcsWindow
         GUI.color = ClrDiv;
         GUI.Label(new Rect(x, y, w, 1f), "");
         GUI.color = oldColor;
+    }
+
+    private static void DrawLabel(Rect rect, string text, int fontSize)
+    {
+        var oldFontSize = GUI.skin.label.fontSize;
+        GUI.skin.label.fontSize = fontSize;
+        GUI.Label(rect, text);
+        GUI.skin.label.fontSize = oldFontSize;
     }
 
     public static string ConvertPosition(Vector3 position)

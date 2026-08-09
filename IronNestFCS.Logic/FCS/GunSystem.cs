@@ -1,5 +1,6 @@
 ﻿using System.Collections;
 using System;
+using System.Linq;
 using Il2Cpp;
 using Il2CppTMPro;
 using MelonLoader;
@@ -142,6 +143,44 @@ public class GunSystem {
     public string? BulletInChamber() {
         return gunController?.ChamberedShellBlueprint?.shellDefinition?.ShellId;
     }
+
+    public string? DisplayedShellId() {
+        return string.IsNullOrWhiteSpace(shellId?.text) ? null : shellId.text;
+    }
+
+    public bool TryGetLoadedBulletType(out BulletType bulletType, out string detail) {
+        bulletType = default;
+        var controllerId = BulletInChamber();
+        var displayId = DisplayedShellId();
+        var controllerOk = TryParseShellId(controllerId, out var controllerType);
+        var displayOk = TryParseShellId(displayId, out var displayType);
+        var loadedLike = controllerId != null || CanFire() || SelectedPowderCount() > 0;
+
+        if (loadedLike && controllerOk && displayOk && controllerType != displayType && displayType != BulletType.EMPT) {
+            bulletType = displayType;
+            detail = $"{displayType} (display={NormalizeShellId(displayId)}, controller={NormalizeShellId(controllerId)})";
+            return true;
+        }
+
+        if (controllerOk && controllerType != BulletType.EMPT) {
+            bulletType = controllerType;
+            detail = controllerType.ToString();
+            return true;
+        }
+
+        if (loadedLike && displayOk && displayType != BulletType.EMPT) {
+            bulletType = displayType;
+            detail = $"{displayType} (display={NormalizeShellId(displayId)})";
+            return true;
+        }
+
+        detail = controllerId ?? displayId ?? "empty";
+        return false;
+    }
+
+    public bool IsChambered(BulletType type) {
+        return TryGetLoadedBulletType(out var loadedType, out _) && loadedType == type;
+    }
     
     public bool IsChamberEmpty() {
         return BulletInChamber() == null;
@@ -158,7 +197,7 @@ public class GunSystem {
     public bool TryGetFirstBulletInCylinder(out BulletType bulletType) {
         RefreshBullets();
         foreach (var bullet in bullets) {
-            if (Enum.TryParse(bullet, out bulletType)) {
+            if (TryParseShellId(bullet, out bulletType)) {
                 return true;
             }
         }
@@ -182,7 +221,7 @@ public class GunSystem {
     /// </summary>
     public IEnumerator LoadBullet(BulletType type) {
         RefreshBullets();
-        var index = bullets.IndexOf(type.ToString());
+        var index = bullets.FindIndex(item => TryParseShellId(item, out var parsed) && parsed == type);
         if (index == -1) {
             MelonLogger.Error($"[FCS] GunSystem {_surfix}: " +
                               $"No {type} available in cylinder, current bullets: {string.Join(", ", bullets)}");
@@ -190,14 +229,14 @@ public class GunSystem {
         }
         
         for (var i = 0; i < bullets.Count; ++i) {
-            if (bullets[0] == type.ToString()) {
+            if (TryParseShellId(bullets[0], out var selected) && selected == type) {
                 break;
             };
             yield return NextBullet();
             yield return new WaitForSeconds(1.5f);
             RefreshBullets();
         }
-        if (bullets[0] != type.ToString()) {
+        if (!TryParseShellId(bullets[0], out var front) || front != type) {
             MelonLogger.Error($"[FCS] GunSystem {_surfix}: Can't find {type} after rotation, " +
                               $"current: {string.Join(", ", bullets)}");
             yield break;
@@ -363,7 +402,7 @@ public class GunSystem {
 
     public bool HaveBulletInCylinder(BulletType type) {
         RefreshBullets();
-        return bullets.Contains(type.ToString());
+        return bullets.Any(item => TryParseShellId(item, out var parsed) && parsed == type);
     }
 
     public IEnumerator WaitUntilBulletInCylinder(BulletType type, float timeoutSeconds) {
@@ -380,10 +419,9 @@ public class GunSystem {
     }
 
     public IEnumerator WaitUntilChambered(BulletType type, float timeoutSeconds) {
-        var expected = type.ToString();
         var waited = 0f;
         while (waited < timeoutSeconds) {
-            if (BulletInChamber() == expected) {
+            if (IsChambered(type)) {
                 yield break;
             }
             yield return new WaitForSeconds(0.25f);
@@ -397,6 +435,41 @@ public class GunSystem {
         RefreshBullets();
         return bullets.Contains(null);
     }
+
+    private static bool TryParseShellId(string? shellId, out BulletType bulletType) {
+        bulletType = default;
+        var normalized = NormalizeShellId(shellId);
+        if (string.IsNullOrWhiteSpace(normalized)) {
+            return false;
+        }
+
+        if (normalized == "SMOKE") normalized = "SMK";
+        if (Enum.TryParse(normalized, ignoreCase: true, out bulletType)) {
+            return true;
+        }
+
+        foreach (var code in KnownShellCodes) {
+            if (normalized.Contains(code) && Enum.TryParse(code, ignoreCase: true, out bulletType)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static string NormalizeShellId(string? text) {
+        if (string.IsNullOrWhiteSpace(text)) return "";
+        return text.Trim()
+            .Replace("\r", "")
+            .Replace("\n", "")
+            .Replace(" ", "")
+            .Replace("Shell", "", StringComparison.OrdinalIgnoreCase)
+            .ToUpperInvariant();
+    }
+
+    private static readonly string[] KnownShellCodes = {
+        "APHE", "ATMC", "CLMN", "CYAN", "DRIL", "EQKE", "FLCH", "HCHE", "INCN", "PLCM",
+        "PHGN", "PRPG", "STAR", "SMK", "TEAR", "THRM", "EMPT", "HE", "AP", "LE", "WP"
+    };
 
     public IEnumerator WaitBackToIdle() {
         while (gunController.elevationChangeVelocity != 0) {

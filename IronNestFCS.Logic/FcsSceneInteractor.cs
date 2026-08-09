@@ -119,8 +119,8 @@ public class FcsSceneInteractor {
     private void InitializeOtherBulletButtons(ref float x, float z) {
         const float rowY = -0.6916f;
         var selectZ = z;
-        var prevZ = selectZ - 0.20f;
-        var nextZ = selectZ - 0.26f;
+        var prevZ = selectZ - 0.12f;
+        var nextZ = selectZ - 0.18f;
 
         otherSelectButton = AddButton(() => SelectBulletType(otherBulletTypes[otherBulletIndex], otherSelectButton), Color.white);
         otherSelectButton.transform.position = new Vector3(x, rowY, selectZ);
@@ -184,6 +184,7 @@ public class FcsSceneInteractor {
             var targetId = i;
             GameObject button = null;
             button = AddButton(() => {
+                fcs.RefreshPlayerTurretMarkerBeforeTargeting(!fcs.ManualMarkerPriorityMode);
                 var task = fcs.MapTable.GetMarkTarget(targetId);
                 if (task == null) {
                     return; // 地图上没有这个编号的目标
@@ -191,6 +192,7 @@ public class FcsSceneInteractor {
                 task.targetId = targetId;
                 task.bulletType = selectedBulletType;
                 task.manualPriority = fcs.ManualMarkerPriorityMode;
+                task.userRequested = true;
                 fcs.EnqueueTask(task);
                 SetColor(button, Color.gray);
                 button.GetComponent<Collider>().enabled = false;
@@ -218,11 +220,13 @@ public class FcsSceneInteractor {
     public void FireTarget(int targetId) {
         if (!targetButtons.TryGetValue(targetId, out var button)) return;
         if (!button.GetComponent<Collider>().enabled) return;
+        fcs.RefreshPlayerTurretMarkerBeforeTargeting(!fcs.ManualMarkerPriorityMode);
         var task = fcs.MapTable.GetMarkTarget(targetId);
         if (task == null) return;
         task.targetId = targetId;
         task.bulletType = selectedBulletType;
         task.manualPriority = fcs.ManualMarkerPriorityMode;
+        task.userRequested = true;
         fcs.EnqueueTask(task);
         SetColor(button, Color.gray);
         button.GetComponent<Collider>().enabled = false;
@@ -232,8 +236,17 @@ public class FcsSceneInteractor {
         }, 1f));
     }
 
-    public void FireAtWorldPos(int id, Vector3 worldPos, EntityLocation? location = null, bool preserveAimPoint = false)
+    public void FireAtWorldPos(
+        int id,
+        Vector3 worldPos,
+        EntityLocation? location = null,
+        bool preserveAimPoint = false,
+        bool movingAreaAim = false,
+        BulletType? bulletTypeOverride = null,
+        string? areaClusterKey = null,
+        IReadOnlyCollection<IntPtr>? areaClusterMembers = null)
     {
+        fcs.RefreshPlayerTurretMarkerBeforeTargeting();
         var turret = fcs.MapTable.turret;
         if (turret == null) return;
         var mapSurface = GameObject.Find("Draggable Surface")?.transform;
@@ -252,13 +265,17 @@ public class FcsSceneInteractor {
             location = location,
             targetTypeDialValue = TargetTypeMapper.FromLocation(location),
             preserveAimPoint = preserveAimPoint,
-            bulletType = selectedBulletType
+            movingAreaAim = movingAreaAim,
+            areaClusterKey = areaClusterKey ?? "",
+            areaClusterMembers = areaClusterMembers?.Distinct().ToList() ?? new List<IntPtr>(),
+            bulletType = bulletTypeOverride ?? selectedBulletType
         };
         fcs.EnqueueTask(task);
     }
 
     public void FireAtWorldPosFront(int id, Vector3 worldPos, EntityLocation? location = null)
     {
+        fcs.RefreshPlayerTurretMarkerBeforeTargeting();
         var turret = fcs.MapTable.turret;
         if (turret == null) return;
         var mapSurface = GameObject.Find("Draggable Surface")?.transform;

@@ -20,7 +20,9 @@ internal static class TargetPriority {
 
             var roleVal = ReadRole(entity, entType);
             var stars = ReadStars(entity, entType);
+            var name = loc.gameObject != null ? loc.gameObject.name.ToLowerInvariant() : "";
             var icon = ReadStringProperty(entity, entType, "Icon")?.ToLowerInvariant();
+            var text = $"{name} {icon}";
             var isFdc = icon?.Contains("fire direction") == true;
 
             if (roleVal >= 0) {
@@ -28,6 +30,7 @@ internal static class TargetPriority {
                 var hasEnemy = (roleVal & RoleEnemy) != 0;
                 if (hasAlly && !hasEnemy) return 0;
 
+                if (IsTrainStation(text)) return 4;
                 if (stars >= 3) return 4;
                 if (isFdc) return 4;
                 if ((roleVal & RoleArtillery) != 0) return 4;
@@ -43,6 +46,13 @@ internal static class TargetPriority {
         }
         catch { }
         return 1;
+    }
+
+    private static bool IsTrainStation(string text) {
+        return text.Contains("train_station")
+               || text.Contains("train station")
+               || text.Contains("target station")
+               || text.Contains("terminal");
     }
 
     public static int GetStars(EntityLocation? loc) {
