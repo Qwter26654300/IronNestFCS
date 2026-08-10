@@ -272,7 +272,7 @@ public class BallisticCalculator {
         if (upper == "HCHE") { type = BulletType.HCHE; return true; }
         if (upper == "INCN") { type = BulletType.INCN; return true; }
         if (upper == "LE") { type = BulletType.LE; return true; }
-        if (upper == "PLCM") { type = BulletType.PLCM; return true; }
+        if (upper == "PLCM" || upper == "PCLM") { type = BulletType.PLCM; return true; }
         if (upper == "PHGN") { type = BulletType.PHGN; return true; }
         if (upper == "PRPG") { type = BulletType.PRPG; return true; }
         if (upper == "STAR") { type = BulletType.STAR; return true; }
@@ -425,6 +425,7 @@ public class BallisticCalculator {
                || upper.Contains("FLCH")
                || upper.Contains("INCN")
                || upper.Contains("PLCM")
+               || upper.Contains("PCLM")
                || upper.Contains("PHGN")
                || upper.Contains("PRPG")
                || upper.Contains("STAR")
@@ -440,7 +441,7 @@ public class BallisticCalculator {
     {
         var upper = NormalizeShellText(text);
         return upper is "EMPT" or "AP" or "APHE" or "ATMC" or "CLMN" or "CYAN" or "DRIL"
-            or "EQKE" or "FLCH" or "HCHE" or "HE" or "INCN" or "LE" or "PLCM"
+            or "EQKE" or "FLCH" or "HCHE" or "HE" or "INCN" or "LE" or "PLCM" or "PCLM"
             or "PHGN" or "PRPG" or "SMK" or "SMOKE" or "STAR" or "TEAR" or "THRM" or "WP";
     }
 
