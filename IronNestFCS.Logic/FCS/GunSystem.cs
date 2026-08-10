@@ -444,6 +444,7 @@ public class GunSystem {
         }
 
         if (normalized == "SMOKE") normalized = "SMK";
+        if (normalized == "PCLM") normalized = "PLCM";
         if (Enum.TryParse(normalized, ignoreCase: true, out bulletType)) {
             return true;
         }
