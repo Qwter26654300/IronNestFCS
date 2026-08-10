@@ -71,6 +71,9 @@ public class PurchaseDeck {
         if (shellCode == "SMOKE") {
             shellCode = "SMK";
         }
+        if (shellCode == "PCLM") {
+            shellCode = "PLCM";
+        }
 
         return Enum.TryParse(shellCode, ignoreCase: true, out shell) && shell != BulletType.EMPT;
     }
